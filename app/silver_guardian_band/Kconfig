@@ -1,0 +1,63 @@
+config SILVER_GUARDIAN_BAND
+	bool "Silver Guardian Band Application"
+	default n
+	---help---
+		Enable Silver Guardian Band application for elderly care.
+
+		Core features:
+		- SOS emergency call
+		- Sitting detection
+		- BLE communication
+		- LVGL UI
+
+if SILVER_GUARDIAN_BAND
+
+config SILVER_GUARDIAN_BAND_PRIORITY
+	int "Silver Guardian Band task priority"
+	default 100
+	---help---
+		Priority of the main task.
+
+config SILVER_GUARDIAN_BAND_STACKSIZE
+	int "Silver Guardian Band stack size"
+	default 8192
+	---help---
+		Stack size for the main task.
+
+config SOS_BUTTON_PIN
+	int "SOS button GPIO pin"
+	default 1
+	---help---
+		GPIO pin number for SOS button.
+
+config SOS_PRESS_DURATION
+	int "SOS long press duration (ms)"
+	default 3000
+	---help---
+		Duration in milliseconds to trigger SOS.
+
+config SITTING_THRESHOLD
+	int "Sitting reminder threshold (seconds)"
+	default 3600
+	---help---
+		Time in seconds before sitting reminder.
+
+config STILL_THRESHOLD
+	int "Long still alert threshold (seconds)"
+	default 7200
+	---help---
+		Time in seconds before still alert.
+
+config IMU_SAMPLE_RATE
+	int "IMU sample rate (Hz)"
+	default 100
+	---help---
+		IMU data sampling rate.
+
+config BLE_ENABLED
+	bool "Enable BLE communication"
+	default y
+	---help---
+		Enable Bluetooth Low Energy communication.
+
+endif # SILVER_GUARDIAN_BAND

@@ -1,0 +1,51 @@
+config SILVER_GUARDIAN_HUB
+	bool "Silver Guardian Hub Application"
+	default n
+	---help---
+		Enable Silver Guardian Hub application for elderly care.
+
+		Core features:
+		- Event processing system
+		- Audio playback (TTS)
+		- Medication reminder
+		- Cloud communication
+
+if SILVER_GUARDIAN_HUB
+
+config SILVER_GUARDIAN_HUB_PRIORITY
+	int "Silver Guardian Hub task priority"
+	default 100
+	---help---
+		Priority of the main task.
+
+config SILVER_GUARDIAN_HUB_STACKSIZE
+	int "Silver Guardian Hub stack size"
+	default 16384
+	---help---
+		Stack size for the main task.
+
+config MEDICATION_MAX_PLANS
+	int "Maximum medication plans"
+	default 10
+	---help---
+		Maximum number of medication plans.
+
+config CLOUD_API_URL
+	string "Cloud API URL"
+	default "https://api.silver-guardian.com/v1"
+	---help---
+		Cloud API base URL.
+
+config CLOUD_ENABLED
+	bool "Enable cloud communication"
+	default y
+	---help---
+		Enable cloud communication.
+
+config AUDIO_VOLUME
+	int "Default audio volume"
+	default 70
+	---help---
+		Default audio volume (0-100).
+
+endif # SILVER_GUARDIAN_HUB
