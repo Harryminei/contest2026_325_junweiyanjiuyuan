@@ -1,0 +1,7 @@
+# Silver Guardian Hub - Make.defs
+#
+# Licensed under the Apache License, Version 2.0
+
+ifneq ($(CONFIG_LVX_USE_DEMO_CONTEST2026_325_SILVER_GUARDIAN_HUB),)
+CONFIGURED_APPS += $(APPDIR)/packages/demos/contest2026_325_silver_guardian_hub
+endif

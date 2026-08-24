@@ -216,27 +216,21 @@ AI 模型：LLM（对话、ASR、TTS）
 ```
 contest2026_325_junweiyanjiuyuan/
 ├── app/                              ← AI 硬件赛道应用代码
-│   └── silver_guardian/              ← 银发守护应用
-│       ├── src/
-│       │   ├── main.c               ← 主程序
-│       │   ├── imu/                 ← IMU 驱动和算法
-│       │   ├── ble/                 ← BLE 服务
-│       │   ├── ui/                  ← LVGL 界面
-│       │   └── utils/               ← 工具函数
-│       ├── include/                 ← 头文件
-│       └── README.md                ← 应用说明
+│   ├── silver_guardian_band/         ← 手环端应用（SF32LB52）
+│   │   ├── src/                      ← main/sos/imu/ble/ui
+│   │   ├── include/                  ← 头文件
+│   │   ├── CMakeLists.txt            ← openvela 构建配置
+│   │   └── Kconfig
+│   ├── silver_guardian_hub/          ← Hub端应用（Gemini-S1）✅
+│   │   ├── src/                      ← main/event/audio/medication/cloud
+│   │   ├── include/                  ← 头文件
+│   │   ├── CMakeLists.txt            ← openvela 构建配置（已适配）
+│   │   ├── Makefile / Make.defs      ← Make 构建（已适配）
+│   │   └── Kconfig
+│   └── hello_app/                    ← 官方示例
 │
-├── board/                            ← 板级适配
-│   └── sf32lb52/                     ← 黄山派 SF32LB52
-│       ├── src/                      ← 板级初始化
-│       ├── configs/                  ← 默认配置
-│       └── README.md                 ← 板级说明
-│
-├── quickapp/                         ← 快应用代码（家属端）
-│   └── guardian_app/                 ← 家属端 APP
-│       ├── manifest.json
-│       ├── pages/
-│       └── README.md
+├── board/                            ← 板级适配（官方示例）
+│   └── contest_board/
 │
 ├── docs/                             ← 项目文档 ⭐
 │   ├── 00_项目总览.md               ← 项目概述
@@ -248,8 +242,8 @@ contest2026_325_junweiyanjiuyuan/
 │   └── README.md                    ← 文档导航
 │
 ├── logs/                             ← AI Coding 日志
-│   └── Harryminei/
-│       └── ...
+│   └── harryminei/
+│       └── 2026-08-24/              ← 今日日志（hub编译烧录）
 │
 └── README.md                         ← 项目主 README（本文件）
 ```
@@ -280,23 +274,30 @@ cd ~/contest2026_325_junweiyanjiuyuan
 cd ..
 
 # 编译（需要 SF32LB52 开发板）
-./build.sh vendor/openvela/boards/sf32lb52/configs/nsh -j8
+./build.sh vendor/sifli/boards/sf32lb52/lckfb_huangshan_pi/configs/nsh -j8
 
 # 烧录
 # 使用 J-Link 或串口烧录到 SF32LB52 开发板
 ```
 
-### Hub端编译
+### Hub端编译（Gemini-S1，已验证 ✅）
 
 ```bash
 # 进入 openvela 工作区根目录
 cd ..
 
-# 编译（需要 Gemini-S1 开发板）
-./build.sh vendor/openvela/boards/gemini_s1/configs/nsh -j8
+# 编译（2.8寸 SPI 屏配置，已实测通过）
+./build.sh vendor/allwinnertech/boards/r528/r528s3-gemini-s1/configs/nsh_minidisplay/ -j8
+
+# 打包固件（在 lichee 目录）
+cd vendor/allwinnertech/lichee
+source envsetup.sh
+lunch_nuttx r528s3-gemini-s1
+pack
 
 # 烧录
-# 使用 USB 或 SD 卡烧录到 Gemini-S1 开发板
+# 用 PhoenixSuit 烧录 out/r528s3/gemini-s1_nand/rtos_nuttx_r528s3-gemini-s1_uart0_128Mnand.img
+# 注意：烧录需使用出厂固件配套的 fes1/boot0（详见 docs/开发文档）
 ```
 
 ### 运行测试
@@ -347,7 +348,8 @@ cd ..
 ### 日志管理
 
 - **自动采集**：在 openvela 工作区内使用 AI 工具，日志自动保存
-- **日志位置**：`logs/Harryminei/`
+- **手动保存**：本地开发时手动保存到 `logs/harryminei/`
+- **日志位置**：`logs/harryminei/`
 - **提交方式**：随代码一起提交到 GitHub
 
 ### AI 对开发的帮助
@@ -376,6 +378,11 @@ cd ..
 - [x] 用药提醒功能（Hub端）
 
 ### 第三阶段：智能交互（第6-7周）🔄
+- [x] **Hub端编译打包烧录上板验证**（2026-08-24，全链路打通）
+  - 编译：nsh_minidisplay 配置编译通过
+  - 烧录：PhoenixSuit 烧录成功，板子运行自编译系统
+  - 运行：silver_guardian_hub 应用初始化成功（事件/用药/云端）
+- [ ] 音频驱动配置（I2S，让 TTS 真实发声）
 - [ ] 语音交互完善（ASR/TTS 集成）
 - [ ] AI Agent 集成（LLM 对话）
 - [ ] 云端服务完善（API 对接）
@@ -451,8 +458,8 @@ cd ..
 
 ---
 
-**最后更新**: 2026-08-15~2026-08-20
-**版本**: v1.0
+**最后更新**: 2026-08-24（Hub端编译烧录上板验证完成）
+**版本**: v0.3.0
 **状态**: 开发中
 
 **⭐ 如果您觉得这个项目有价值，请给我们一个 Star！⭐**

@@ -35,7 +35,7 @@
 cd ~/contest2026_325_junweiyanjiuyuan/..
 
 # 编译
-./build.sh vendor/openvela/boards/sf32lb52/configs/nsh -j8
+./build.sh vendor/sifli/boards/sf32lb52/lckfb_huangshan_pi/configs/nsh -j8
 ```
 
 ## 烧录

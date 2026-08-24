@@ -6,6 +6,26 @@
 
 ## [未发布]
 
+## [0.3.0] - 2026-08-24
+
+### 重大进展 - Hub端编译打包烧录上板验证全链路打通
+- Hub端应用 `silver_guardian_hub` 成功编译进 openvela 固件
+- 适配 openvela packages 构建系统（CMakeLists.txt / Makefile / Make.defs / Kconfig）
+- manifest 添加 `silver_guardian_hub` 的 linkfile 集成到构建树
+- 编译 `nsh_minidisplay` 配置通过，打包固件成功
+- 修复 update_mbr 分区关联 bug（script 工具合并 partition 导致 nsh.fex 错配 sst 分区）
+- 修复 PhoenixSuit 2.0.0 烧录兼容问题（bootloader 分区 16384 / 使用出厂 fes1+boot0）
+- **板子烧录成功并运行自编译系统**，hub 应用初始化成功：
+  - 事件系统 ✅
+  - 音频系统 ✅（I2S 暂未配置）
+  - 用药提醒 ✅（降压药计划）
+  - 云端通信 ✅
+  - 欢迎语音 TTS 已触发
+
+### 其他
+- 记录 AI Coding 日志到 `logs/harryminei/2026-08-24/`
+- 更新 README 构建说明、项目结构、开发计划
+
 ## [0.2.1] - 2026-08-21
 
 ### 优化

@@ -1,17 +1,18 @@
+# Silver Guardian Hub - Makefile
+#
+# Licensed under the Apache License, Version 2.0
+
 include $(APPDIR)/Make.defs
 
-# 应用名称
-
+ifeq ($(CONFIG_LVX_USE_DEMO_CONTEST2026_325_SILVER_GUARDIAN_HUB), y)
 PROGNAME = silver_guardian_hub
-PRIORITY = $(CONFIG_SILVER_GUARDIAN_HUB_PRIORITY)
-STACKSIZE = $(CONFIG_SILVER_GUARDIAN_HUB_STACKSIZE)
+PRIORITY = 100
+STACKSIZE = 32768
+MODULE = $(CONFIG_LVX_USE_DEMO_CONTEST2026_325_SILVER_GUARDIAN_HUB)
 
-# 源文件
-
-CSRCS = src/main.c \
-        src/event.c \
-        src/audio.c \
-        src/medication.c \
-        src/cloud.c
+CFLAGS += ${INCDIR_PREFIX}$(APPDIR)/packages/demos/contest2026_325_silver_guardian_hub
+CSRCS = src/event.c src/audio.c src/medication.c src/cloud.c
+MAINSRC = src/main.c
+endif
 
 include $(APPDIR)/Application.mk

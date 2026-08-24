@@ -35,20 +35,31 @@
 # 进入 openvela 工作区根目录
 cd ~/contest2026_325_junweiyanjiuyuan/..
 
-# 编译
-./build.sh vendor/openvela/boards/gemini_s1/configs/nsh -j8
+# 编译（2.8寸 SPI 屏配置，已验证 ✅）
+./build.sh vendor/allwinnertech/boards/r528/r528s3-gemini-s1/configs/nsh_minidisplay/ -j8
 ```
 
 ## 烧录
 
-使用 USB 或 SD 卡烧录到 Gemini-S1 开发板。
+使用 PhoenixSuit 烧录打包产物 `lichee/out/r528s3/gemini-s1_nand/rtos_nuttx_r528s3-gemini-s1_uart0_128Mnand.img`。
+注意：需使用出厂固件配套的 fes1/boot0 引导文件（否则 PhoenixSuit 无法烧录）。
 
 ## 运行
 
 ```bash
 # 在 NuttX Shell 中
 nsh> silver_guardian_hub
+
+# 查看运行日志
+nsh> dmesg
 ```
+
+## 已验证（2026-08-24）
+
+- 编译打包烧录全链路打通
+- 板子运行自编译 openvela 系统
+- 应用初始化成功：事件/音频/用药提醒/云端，欢迎语音 TTS 触发
+- 待办：I2S 音频驱动配置（当前语音播报无声）
 
 ## 目录结构
 
