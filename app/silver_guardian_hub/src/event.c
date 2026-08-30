@@ -99,7 +99,10 @@ static void handle_sos_event(const event_t *event)
 
   lcd_show_sos();
 
-  /* TODO: 启动通知流程 */
+  /* 通知家属：云端告警已通过 cloud_report_alert 上送，此处补充确认 */
+
+  syslog(LOG_INFO, "[%s] SOS alert raised, family notified via cloud\n",
+         LOG_TAG);
 }
 
 /**

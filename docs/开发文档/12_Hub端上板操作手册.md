@@ -234,3 +234,14 @@ silver_guardian_hub
 - `Kconfig`：补充 LCD 功能说明与中文字体提示
 - 板级 `defconfig`：新增 `CONFIG_LV_FONT_SIMSUN_16_CJK=y`（中文字体）
 - `README.md`、`CHANGELOG.md`：同步更新
+
+---
+
+## ☁️ 九、云端与音频当前实现状态（重要、如实说明）
+
+- **云端通信**：`cloud.c` 已提供完整接口（TTS/ASR/LLM/告警/健康/配置），但当前为**可用框架 + demo 降级数据**，尚未接入真实后端。原因：API 基址 `https://api.silver-guardian.com/v1` 是**占位域名（无真实服务器）**，且 HTTPS/TLS 需后端凭证。板级已具备联网条件（`CONFIG_NET_TCP`、`CONFIG_NETDB_DNSCLIENT`、`CONFIG_IEEE80211_REALTEK_WIFI`、`apps/netutils/webclient`）。**要让云端功能真正工作，需提供真实后端 API、密钥并配置 WiFi（SSID/密码）。**
+- **音频播放**：`audio.c` 已封装 TTS 播放/录音/音量接口，但 `audio_init` 打开 I2S 设备（`/dev/i2s0`）可能失败（板级 I2S/Codec 驱动在 `CONFIG_AW_AUDIO_CODEC` 下，当前未确认设备节点），此时播放自动降级为“仅日志、不报错”。要真正出声需板级 I2S/Codec 初始化就绪。
+- **用药计划**：默认一个演示计划「降压药 08:00」，3 次未提醒后会自动上送 `medication_missed` 云端告警。要立即触发用药提醒验证，可在 `medication_init` 中把计划时间改成当前时刻。
+- **SOS / 久坐**：由手环端 BLE 或事件触发，触发后 LCD 弹窗 + 语音（音频可用则播）+ 云端告警（有后端则推送）。
+
+**结论**：应用代码层已完整、可编译、可在板子显示 LCD；云端/音频的真实现依赖外部后端与硬件驱动，代码接口已就位，补齐外部资源即可接通。

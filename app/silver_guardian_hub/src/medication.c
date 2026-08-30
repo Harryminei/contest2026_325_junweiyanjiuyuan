@@ -18,6 +18,7 @@
 #include "include/medication.h"
 #include "include/event.h"
 #include "include/audio.h"
+#include "include/cloud.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -170,7 +171,9 @@ void medication_process(void)
               syslog(LOG_WARNING, "[%s] Medication missed: %s\n",
                      LOG_TAG, plan->name);
 
-              /* TODO: 通知家属 */
+              /* 通知家属：用药超时未服，上送云端告警 */
+
+              cloud_report_alert("medication_missed", plan->name);
 
               plan->taken = true;  /* 标记为已处理 */
             }
