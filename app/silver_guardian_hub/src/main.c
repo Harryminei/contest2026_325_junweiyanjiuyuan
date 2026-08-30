@@ -21,6 +21,7 @@
 #include "include/audio.h"
 #include "include/medication.h"
 #include "include/cloud.h"
+#include "include/lcd.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -90,6 +91,17 @@ static int system_init(void)
 
   syslog(LOG_INFO, "[%s] Cloud system initialized\n", LOG_TAG);
 
+  /* 初始化 LCD 界面 */
+
+  ret = lcd_init();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "[%s] LCD init failed: %d\n", LOG_TAG, ret);
+      return ret;
+    }
+
+  syslog(LOG_INFO, "[%s] LCD system initialized\n", LOG_TAG);
+
   syslog(LOG_INFO, "[%s] Hub system initialized successfully\n",
          LOG_TAG);
 
@@ -106,6 +118,8 @@ static void system_run(void)
 
   while (g_running)
     {
+      const cloud_status_t *cloud;
+
       /* 处理事件 */
 
       event_process();
@@ -118,9 +132,15 @@ static void system_run(void)
 
       cloud_process();
 
-      /* 休眠 100ms */
+      /* 同步网络状态到 LCD 并刷新界面 */
 
-      usleep(100000);
+      cloud = cloud_get_status();
+      lcd_set_network(cloud->wifi_connected, cloud->wifi_signal);
+      lcd_task();
+
+      /* 休眠 20ms */
+
+      usleep(20000);
     }
 }
 
@@ -132,6 +152,7 @@ static void system_cleanup(void)
   medication_deinit();
   audio_deinit();
   event_deinit();
+  lcd_deinit();
 
   syslog(LOG_INFO, "[%s] Hub cleanup complete\n", LOG_TAG);
 }

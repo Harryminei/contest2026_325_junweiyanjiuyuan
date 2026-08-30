@@ -14,3 +14,6 @@ config LVX_USE_DEMO_CONTEST2026_325_SILVER_GUARDIAN_HUB
 		- Audio playback (TTS)
 		- Medication reminder
 		- Cloud communication
+		- LCD/LVGL UI (clock, SOS / sitting / medication alerts)
+
+		Note: enable LV_FONT_SIMSUN_16_CJK for Chinese UI text.

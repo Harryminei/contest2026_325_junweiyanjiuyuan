@@ -29,6 +29,10 @@
    - 告警上报
    - 健康数据同步
 
+5. **LCD 界面（LVGL）**
+   - 主界面：时钟、日期、网络/守护状态
+   - 警示界面：SOS(红) / 久坐(橙) / 用药(蓝)
+
 ## 编译
 
 ```bash
@@ -38,6 +42,8 @@ cd ~/contest2026_325_junweiyanjiuyuan/..
 # 编译（2.8寸 SPI 屏配置，已验证 ✅）
 ./build.sh vendor/allwinnertech/boards/r528/r528s3-gemini-s1/configs/nsh_minidisplay/ -j8
 ```
+
+> ⚠️ 若要界面显示中文，需在板级 `nsh_minidisplay/defconfig` 中加 `CONFIG_LV_FONT_SIMSUN_16_CJK=y`（LVGL 默认字体不含汉字）。
 
 ## 烧录
 
@@ -70,12 +76,14 @@ silver_guardian_hub/
 │   ├── event.c         # 事件处理
 │   ├── audio.c         # 音频播放
 │   ├── medication.c    # 用药提醒
-│   └── cloud.c         # 云端通信
+│   ├── cloud.c         # 云端通信
+│   └── lcd.c           # LCD/LVGL 界面
 ├── include/
 │   ├── event.h
 │   ├── audio.h
 │   ├── medication.h
-│   └── cloud.h
+│   ├── cloud.h
+│   └── lcd.h           # LCD 界面接口
 ├── configs/
 ├── Kconfig             # 配置选项
 ├── Makefile            # 构建脚本
@@ -117,5 +125,5 @@ silver_guardian_hub/
 - [ ] 完善 TTS 集成
 - [ ] 完善 ASR 集成
 - [ ] 完善 LLM 对话
-- [ ] LCD 界面开发
+- [x] LCD 界面开发（LVGL）
 - [ ] 功耗优化

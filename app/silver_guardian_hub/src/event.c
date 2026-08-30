@@ -18,6 +18,7 @@
 #include "include/event.h"
 #include "include/audio.h"
 #include "include/cloud.h"
+#include "include/lcd.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -94,7 +95,9 @@ static void handle_sos_event(const event_t *event)
 
   cloud_report_alert("sos", "老人触发SOS紧急呼救");
 
-  /* TODO: LCD 显示 SOS 界面 */
+  /* LCD 显示 SOS 界面 */
+
+  lcd_show_sos();
 
   /* TODO: 启动通知流程 */
 }
@@ -126,7 +129,9 @@ static void handle_sitting_event(const event_t *event)
 
   audio_play(text);
 
-  /* TODO: LCD 显示久坐提醒 */
+  /* LCD 显示久坐提醒 */
+
+  lcd_show_sitting(minutes);
 
   cloud_report_alert("sitting_reminder", text);
 }
@@ -156,7 +161,9 @@ static void handle_medication_event(const event_t *event)
 
   audio_play(text);
 
-  /* TODO: LCD 显示用药提醒 */
+  /* LCD 显示用药提醒 */
+
+  lcd_show_medication(event->message, 0, "");
 }
 
 /****************************************************************************

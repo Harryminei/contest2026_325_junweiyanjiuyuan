@@ -6,6 +6,19 @@
 
 ## [未发布]
 
+## [0.4.0] - 2026-08-30
+
+### 新增 - Hub端 LCD 界面（LVGL）
+- 新增 `src/lcd.c` / `include/lcd.h` LVGL 界面模块
+  - 通过 `lv_nuttx_init` 绑定 `/dev/lcd0`（2.8寸 ILI9341 SPI 屏）
+  - 主界面：时钟（48号大字）、日期、顶部状态栏（标题+联网状态）、底部守护状态
+  - 警示界面：SOS(红) / 久坐(橙) / 用药(蓝)，事件触发弹出，10秒自动返回主界面
+- `event.c`：SOS / 久坐 / 用药 事件 → 调用 LCD 警示界面（替换原 TODO）
+- `main.c`：集成 `lcd_init / lcd_task / lcd_deinit`，主循环 20ms 驱动 LVGL，并同步网络状态
+- `Makefile`：加入 `src/lcd.c`；`CMakeLists.txt`：加 `DEPENDS lvgl`；`Kconfig`：补充 LCD 说明
+- 启用中文字体 `CONFIG_LV_FONT_SIMSUN_16_CJK`（板级 defconfig，LVGL 默认字体无汉字）
+- 新增详细上板操作手册 `docs/开发文档/12_Hub端上板操作手册.md`
+
 ## [0.3.0] - 2026-08-24
 
 ### 重大进展 - Hub端编译打包烧录上板验证全链路打通

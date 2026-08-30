@@ -11,7 +11,7 @@ STACKSIZE = 32768
 MODULE = $(CONFIG_LVX_USE_DEMO_CONTEST2026_325_SILVER_GUARDIAN_HUB)
 
 CFLAGS += ${INCDIR_PREFIX}$(APPDIR)/packages/demos/contest2026_325_silver_guardian_hub
-CSRCS = src/event.c src/audio.c src/medication.c src/cloud.c
+CSRCS = src/event.c src/audio.c src/medication.c src/cloud.c src/lcd.c
 MAINSRC = src/main.c
 endif
 
