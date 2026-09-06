@@ -283,7 +283,7 @@ static void show_alert(uint32_t bg_color, const char *title,
  * Public Functions
  ****************************************************************************/
 
-int lcd_init(void)
+int silver_lcd_init(void)
 {
   lv_nuttx_dsc_t info;
 
@@ -293,6 +293,26 @@ int lcd_init(void)
 
   if (lv_is_initialized())
     {
+      /* LVGL 已被系统初始化，复用默认 display 并接管画出界面 */
+      g_result.disp = lv_display_get_default();
+      if (g_result.disp == NULL)
+        {
+          syslog(LOG_ERR, "[%s] LVGL display attach failed!\n", LOG_TAG);
+          return -ENODEV;
+        }
+
+      build_main_screen();
+      build_alert_screen();
+      lv_scr_load(g_scr_main);
+
+      g_initialized = true;
+      g_view = LCD_VIEW_MAIN;
+
+      syslog(LOG_INFO, "[%s] LCD system initialized (reuse, %dx%d)\n",
+             LOG_TAG,
+             (int)lv_display_get_horizontal_resolution(g_result.disp),
+             (int)lv_display_get_vertical_resolution(g_result.disp));
+
       return OK;
     }
 

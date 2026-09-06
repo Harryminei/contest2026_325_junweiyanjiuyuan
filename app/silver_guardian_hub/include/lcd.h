@@ -39,7 +39,7 @@ typedef enum
  * @return 0 成功；负值失败
  */
 
-int lcd_init(void);
+int silver_lcd_init(void);
 
 /**
  * @brief 反初始化 LCD 界面

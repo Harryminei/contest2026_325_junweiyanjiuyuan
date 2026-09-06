@@ -93,7 +93,7 @@ static int system_init(void)
 
   /* 初始化 LCD 界面 */
 
-  ret = lcd_init();
+  ret = silver_lcd_init();
   if (ret < 0)
     {
       syslog(LOG_ERR, "[%s] LCD init failed: %d\n", LOG_TAG, ret);
