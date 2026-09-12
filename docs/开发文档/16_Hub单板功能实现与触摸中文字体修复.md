@@ -411,12 +411,34 @@ defconfig 也开了 `CONFIG_FS_YAFFS`，所以 **`/data` 是掉电不丢的可�
 | 现象 | 先看哪里 |
 |---|---|
 | 界面上还是旧行为 | 忘了 `sync_app.sh push`。跑 `sync_app.sh status` 看 A/B 是否一致 |
+| **改了代码、编译也成功、`strings vela.bin` 能查到新字符串，但板子行为就是不变** | **`out/.../image/nsh.fex` 是旧的**（dragon 读它，但 build.sh 只写 `board/.../configs/nsh.fex`，两者不同步）。用 `pack_hub.sh`（已内置强制同步与校验），别直接 `pack` |
+| **改了代码但 vela.bin 大小和上一版一模一样** | 两种可能：① 改动确实小于 4KB，vela.bin 按 4KB 对齐，属正常；② 改动被 `push(A→C)` 覆盖了 —— 见下一条 |
+| **Windows 侧改的代码"消失"** | `sync_app.sh push` 是 A→C，会覆盖 C 上更新的文件。`build_hub.sh` 现在是 `pull(C→A) → gen_fonts → push(A→B,C) → build`，顺序不能换 |
 | 编译"成功"但屏上没变化 | 看 `build_hub.sh` 输出的 `vela.bin` 时间戳和 strings 校验；链接失败时 vela.bin 不更新，但日志时间戳照刷 |
 | 链接报 `multiple definition` | 符号和系统框架重名。已知 `lcd_init` 与 R528 显示框架冲突，应用侧已改名 `silver_lcd_init` |
-| `nsh.fex` 超过 8MB | 分区塞不下。看 `ls -l vendor/allwinnertech/lichee/out/r528s3/gemini-s1_nand/image/nsh.fex`，超了就要压字库 bpp 或精简字符集 |
-| 中文还是缺字 | 字库字符集里没有那个字。改 `tools/gen_font_charset.py` 后重跑 `gen_lvgl_fonts.sh` |
+| `nsh.fex` 超过 8MB | 分区塞不下。看 `ls -l .../out/r528s3/gemini-s1_nand/image/nsh.fex`，超了就要压字库 bpp 或精简字符集 |
+| 中文还是缺字 | 字库字符集里没有那个字。字符集会**自动扫描源码**收录用到的汉字，改完源码重跑 `gen_lvgl_fonts.sh` 即可 |
+| **中文变成一个个方框，数字正常** | 该控件用了 ASCII-only 字体。`SG_FONT_ASCII_ONLY`(=Montserrat) 没有中文字形，中文一律用 `SG_FONT_TEXT` |
 | 改了 defconfig 没生效 | repo sync 会把 vendor 树重置掉，重跑 `tools/patch_board_config.sh` |
 | 找不到音频设备 | 串口 `ls /dev/audio` 看实际节点名，改 `audio.c` 里的 `g_dev_candidates[]` |
+| **传感器读不到** | 先 `adb shell ls /dev/uorb` 看实际节点名。SHTC3 温度是 `sensor_ambient_temp0`，**不是** `sensor_temp0` |
+| adb 认不到板子 | PhoenixSuit 占着 adb。先 `Stop-Process adb` 再 `adb start-server` |
+| **按复位键后黑屏** | 复位原因若为 `restore` 会执行 `/etc/factory.sh`（**强制格式化 `/data`**）。重启请用断电上电，别按复位键 |
+| 烧录卡 0% | fes1/boot0 不是出厂版。用 `pack_hub.sh` |
+| 烧完行为没变，怀疑烧错文件 | 读 `adb shell cat /data/silver_guardian/diag.txt` 首部的**构建标记**（纯 ASCII，如 `SGHUB-BUILD-20260912-1300`）确认板上是哪一版 |
+
+### 板上诊断速查（adb 直连）
+
+```bash
+adb shell cat /data/silver_guardian/diag.txt   # 各模块真实状态，首选
+adb shell ls /dev/uorb                          # 传感器实际节点名
+adb shell ls /dev/audio                         # 音频实际节点名
+adb shell ps | grep silver                      # 应用是否在跑
+adb shell resetcause                            # 上次复位原因
+```
+
+`diag.txt` 开机写一次、之后每 30 秒刷新。**注意它每次都会重写 NAND**，
+长期挂机演示建议把 `main.c` 里的 `DIAG_INTERVAL_MS` 调大或改为按需写。
 
 ---
 

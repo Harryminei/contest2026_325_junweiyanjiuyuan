@@ -123,7 +123,13 @@ case "$ACTION" in
   pull)
     check_dirs
     echo "== C -> A (把 Windows 上的改动拉回开发源) =="
-    rsync -a --itemize-changes $DRY $DELETE "${EXCLUDES[@]}" "$C/" "$A/"
+
+    # 字库是生成物，唯一源头是 tools/gen_lvgl_fonts.sh —— 不往回拉。
+    # 踩过的坑：在 WSL 生成完新字库后跑 pull，rsync 看到 Windows 侧那份
+    # 大小不同就把新的覆盖掉了，结果编译进去的还是旧字库，缺字照旧。
+    rsync -a --itemize-changes $DRY $DELETE "${EXCLUDES[@]}" \
+          --exclude='src/fonts/*.c' "$C/" "$A/"
+
     echo ""
     if [ -z "$DRY" ]; then
       # Windows 侧 core.autocrlf=true，文件是 CRLF。CRLF 混进 Makefile/Kconfig

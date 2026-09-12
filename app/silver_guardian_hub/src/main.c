@@ -28,15 +28,23 @@
 #include "include/cloud.h"
 #include "include/lcd.h"
 #include "include/ui.h"
+#include "include/diag.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
 #define LOG_TAG  "silver_hub"
-#define APP_VER  "1.1.0"
+#define APP_VER  "1.3.0"
 
-#define LOOP_INTERVAL_US 20000   /* 主循环 20ms */
+/* 主循环 10ms：原来 20ms 时 LVGL 每轮最多晚 20ms 才处理触摸，
+ * 叠加 indev 自身的采样周期，手感偏"迟钝"，用户反馈过触摸不灵敏。 */
+
+#define LOOP_INTERVAL_US 10000
+
+/* 每隔多久把自检报告刷一次（接 adb 就能读到最新状态） */
+
+#define DIAG_INTERVAL_MS (30 * 1000)
 
 /****************************************************************************
  * Private Data
@@ -124,18 +132,28 @@ static int system_init(void)
     }
 
   syslog(LOG_INFO, "[%s] 系统初始化完成\n", LOG_TAG);
+
+  /* 开机就出一份自检报告：接 adb 可以直接 cat 出来看各模块的真实状态 */
+
+  diag_dump("开机初始化完成");
+
   return OK;
 }
 
 static void system_run(void)
 {
+  uint32_t last_diag_ms;
+
   syslog(LOG_INFO, "[%s] 进入主循环\n", LOG_TAG);
 
   audio_play_tone(TONE_STARTUP);
 
+  last_diag_ms = lcd_tick_ms();
+
   while (g_running)
     {
       const cloud_status_t *cloud;
+      uint32_t now;
 
       /* 事件分发（SOS / 久坐 / 用药 -> 提示音 + 警示层） */
 
@@ -151,7 +169,8 @@ static void system_run(void)
 
       /* 传感器 1Hz 采样 */
 
-      sensors_poll(lcd_tick_ms());
+      now = lcd_tick_ms();
+      sensors_poll(now);
 
       /* 驱动 LVGL：触摸、时钟、演示模式 */
 
@@ -165,6 +184,14 @@ static void system_run(void)
 
       cloud = cloud_get_status();
       lcd_set_network(cloud->wifi_connected, cloud->wifi_signal);
+
+      /* 定时刷新自检报告 */
+
+      if ((uint32_t)(now - last_diag_ms) >= DIAG_INTERVAL_MS)
+        {
+          last_diag_ms = now;
+          diag_dump("定时刷新");
+        }
 
       usleep(LOOP_INTERVAL_US);
     }

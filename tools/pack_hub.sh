@@ -48,7 +48,7 @@ FACTORY_BOOT0_MD5="13c5c05a17ceded39c8c39807aca3eb0"
 
 fail() { echo "" >&2; echo "!! $*" >&2; exit 1; }
 
-echo "########## [1/4] 检查出厂 fes1/boot0 ##########"
+echo "########## [1/5] 检查出厂 fes1/boot0 ##########"
 for f in fes1.fex boot0_nand.fex; do
   [ -f "${FACTORY_DIR}/${f}" ] || fail "找不到出厂 ${FACTORY_DIR}/${f}
    它不在 git 里，需要从出厂固件 gemini_s1_mini.img 提取：
@@ -59,20 +59,63 @@ done
 echo ""
 
 if [ "$DO_PACK" -eq 1 ]; then
-  echo "########## [2/4] pack（会覆盖 fes1/boot0，下一步再修回来）##########"
-  cd "$LICHEE" || fail "lichee 目录不存在"
-  # shellcheck disable=SC1091
-  source envsetup.sh >/dev/null 2>&1
-  lunch_nuttx r528s3-gemini-s1 >/dev/null 2>&1
-  pack 2>&1 | tail -6
+  echo "########## [2/5] pack（会覆盖 fes1/boot0，下一步再修回来）##########"
+
+  # 必须放在子 shell 里跑，两个原因：
+  #   1) Allwinner 的 envsetup.sh 会 `set -e`，source 进来之后任何一条命令
+  #      返回非 0 都会把整个脚本带崩；
+  #   2) `pack` 实际成功（会打印 "pack finish" 并生成镜像）却返回退出码 1，
+  #      所以末尾统一 exit 0，由后面的产物校验来把关。
+  (
+    cd "$LICHEE" || exit 1
+    # shellcheck disable=SC1091
+    source envsetup.sh >/dev/null 2>&1
+    lunch_nuttx r528s3-gemini-s1 >/dev/null 2>&1
+    pack 2>&1 | tail -6
+    exit 0
+  )
   echo ""
 else
-  echo "########## [2/4] 跳过 pack (--no-pack) ##########"
+  echo "########## [2/5] 跳过 pack (--no-pack) ##########"
   echo ""
 fi
 
-echo "########## [3/4] 把出厂 fes1/boot0 覆盖回去 ##########"
+echo "########## [3/5] 刷新 out/.../image/nsh.fex（关键！）##########"
+#
+# dragon 打包读的是 out/<board>/image/nsh.fex，而 build.sh 只把新固件写到
+#   lichee/board/r528s3/gemini-s1_nand/configs/nsh.fex
+# 这两个不是同一个文件，也不会自动同步。
+# 踩过的坑：改完代码编译成功、vela.bin 里也确实有新字符串，但 pack 出来的
+# 镜像始终是旧的 —— 因为 dragon 一直在读那份没更新的 image/nsh.fex。
+# 现象非常迷惑人："编译没问题、strings 也能找到新标记，可板子行为就是没变"。
+#
+# 所以这里强制覆盖，并且覆盖后立刻校验构建标记。
+
+BOARD_NSH="${LICHEE}/board/r528s3/gemini-s1_nand/configs/nsh.fex"
+OUT_NSH="${IMGDIR}/nsh.fex"
+
 [ -d "$IMGDIR" ] || fail "输出目录不存在: $IMGDIR（pack 没跑成功？）"
+[ -f "$BOARD_NSH" ] || fail "找不到 $BOARD_NSH（build.sh 没跑到 "Copy nsh.fex" 那步？）"
+
+if [ "$(stat -c %Y "$BOARD_NSH")" -le "$(stat -c %Y "$OUT_NSH" 2>/dev/null || echo 0)" ]; then
+  echo "  提示: board/configs/nsh.fex 不比 image/nsh.fex 新，仍强制覆盖以防万一"
+fi
+
+cp "$BOARD_NSH" "$OUT_NSH" || fail "复制 nsh.fex 失败"
+echo "  $(stat -c %y "$BOARD_NSH" | cut -c1-19)  board/configs/nsh.fex"
+echo "  $(stat -c %y "$OUT_NSH"   | cut -c1-19)  image/nsh.fex  (已同步)"
+
+# 校验：新固件里带构建标记，旧的不带。没有标记说明同步没生效。
+for marker in "SGHUB-BUILD" "/dev/uorb/sensor_ambient_temp0"; do
+  if strings "$OUT_NSH" | grep -qF "$marker"; then
+    echo "  [有] $marker"
+  else
+    echo "  [无] $marker  <- 同步可能没生效" >&2
+  fi
+done
+echo ""
+
+echo "########## [4/5] 把出厂 fes1/boot0 覆盖回去 ##########"
 cd "$IMGDIR" || fail "进不去 $IMGDIR"
 
 for f in fes1.fex boot0_nand.fex; do
@@ -88,7 +131,7 @@ echo "  boot0_nand.fex $M_BOOT0"
 echo "  OK: 两个都是出厂版"
 echo ""
 
-echo "########## [4/4] dragon 重新打包 ##########"
+echo "########## [5/5] dragon 重新打包 ##########"
 # 第二个参数不能省，否则产物只有 2MB
 "${LICHEE}/tools/tool/dragon" image.cfg sys_partition_for_dragon.fex 2>&1 | tail -6
 
@@ -99,9 +142,36 @@ echo "  产物: ${IMGDIR}/${IMGNAME}"
 echo "  大小: ${SIZE} bytes ($((SIZE / 1024 / 1024)) MB)"
 [ "$SIZE" -gt 20000000 ] || fail "镜像只有 $((SIZE / 1024 / 1024))MB，dragon 大概没用对参数"
 
-# 拷到纯英文路径 + D:/tools
+# 拷贝到所有可能被选中的路径。
+#
+# 为什么不止拷一份：PhoenixSuit 会记住上次选中的文件，用户习惯性点"刷机"
+# 就可能又烧了旧的那个文件 —— 实测因此白排查了一轮（"改了代码但板上行为没变"）。
+# 所以把历史用过的文件名也一并覆盖，保证**不管从哪个路径选，都是最新固件**。
+
 cp "$IMGNAME" "$ENGLISH_OUT" && echo "  已拷贝到(英文路径，烧录用这个): ${ENGLISH_OUT}"
-cp "$IMGNAME" "${FACTORY_DIR}/flash_sg.img" && echo "  已拷贝到: ${FACTORY_DIR}/flash_sg.img"
+
+ALIASES=(
+  "${FACTORY_DIR}/flash_sg.img"
+  "${FACTORY_DIR}/flash_20260912_touch_font.img"
+  "$(dirname "$FACTORY_DIR")/contest2026_325_junweiyanjiuyuan/firmware/flash_20260912_touch_font.img"
+  "${WORKSPACE}/flash_20260912_touch_font.img"
+  "${WORKSPACE}/firmware/flash_20260912_touch_font.img"
+)
+
+for a in "${ALIASES[@]}"; do
+  d="$(dirname "$a")"
+  [ -d "$d" ] || continue
+  if cp "$IMGNAME" "$a" 2>/dev/null; then
+    echo "  已拷贝到: $a"
+  fi
+done
+
+echo ""
+echo "  所有路径的 md5（应完全一致）:"
+echo "    $(md5sum "$IMGNAME" | cut -d' ' -f1)  (源)"
+for a in "$ENGLISH_OUT" "${ALIASES[@]}"; do
+  [ -f "$a" ] && echo "    $(md5sum "$a" | cut -d' ' -f1)  $a"
+done
 
 echo ""
 echo "########## 下一步：PhoenixSuit 烧录 ##########"

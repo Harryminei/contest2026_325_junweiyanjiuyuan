@@ -30,6 +30,7 @@
 #include <nuttx/audio/audio.h>
 
 #include "include/audio.h"
+#include "include/diag.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -37,7 +38,11 @@
 
 #define LOG_TAG         "audio"
 
-#define SAMPLE_RATE     16000       /* 采样率 Hz */
+/* 8000Hz 就够：提示音最高 1200Hz，奈奎斯特 4kHz 富余；
+ * 采样率减半意味着同样时长的 PCM 数据量减半，更容易装进驱动的管线缓冲。
+ * （原来 16kHz 时 1.5 秒的 SOS 要 48KB，驱动的缓冲装不下会被截断） */
+
+#define SAMPLE_RATE     8000        /* 采样率 Hz */
 #define BITS_PER_SAMPLE 16
 #define NCHANNELS       1
 
@@ -72,11 +77,13 @@ static const note_t g_tone_startup[]    = { {523, 120}, {659, 120}, {784, 180}, 
 static const note_t g_tone_medication[] = { {880, 200}, {0, 60}, {660, 260}, {0, 0} };
 static const note_t g_tone_sitting[]    = { {660, 180}, {0, 80}, {660, 180}, {0, 0} };
 static const note_t g_tone_error[]      = { {400, 500}, {0, 0} };
+/* SOS 总时长压到约 1 秒：再长会因为超出驱动的管线缓冲而被截断 */
+
 static const note_t g_tone_sos[]        =
 {
-  {1200, 150}, {0, 80}, {1200, 150}, {0, 80}, {1200, 150},
-  {0, 200},
-  {1200, 150}, {0, 80}, {1200, 150}, {0, 80}, {1200, 150},
+  {1200, 120}, {0, 60}, {1200, 120}, {0, 60}, {1200, 120},
+  {0, 160},
+  {1200, 120}, {0, 60}, {1200, 120},
   {0, 0}
 };
 
@@ -201,51 +208,90 @@ static int device_play(const int16_t *pcm, uint32_t samples)
   if (ret < 0)
     {
       syslog(LOG_ERR, "[%s] AUDIOIOC_CONFIGURE 失败: %d\n", LOG_TAG, errno);
+      diag_note_audio_fail("AUDIOIOC_CONFIGURE", errno);
       return -errno;
     }
 
-  /* 2. 让驱动按数据量准备管线缓冲（两块） */
+  /* 2. 问驱动要它的首选缓冲参数，**不去改它**。
+   *
+   * 这里原来会先 AUDIOIOC_SETBUFFERINFO 把缓冲改大以容纳整段提示音，
+   * 但驱动不一定能满足更大的连续内存请求，失败后反而连缓冲都拿不到。
+   * 改成完全听驱动的：它给多大就用多大，装不下的部分截断（会记日志）。
+   * 先确保能出声，再谈音质。 */
 
   memset(&buf_info, 0, sizeof(buf_info));
-  buf_info.nbuffers    = 2;
-  buf_info.buffer_size = total_bytes / 2 + 64;
 
-  if (ioctl(g_fd, AUDIOIOC_SETBUFFERINFO, (unsigned long)&buf_info) != OK)
+  if (ioctl(g_fd, AUDIOIOC_GETBUFFERINFO, (unsigned long)&buf_info) != OK ||
+      buf_info.nbuffers == 0 || buf_info.buffer_size == 0)
     {
-      syslog(LOG_INFO, "[%s] 驱动不支持 SETBUFFERINFO，改用默认缓冲\n",
-             LOG_TAG);
-
-      if (ioctl(g_fd, AUDIOIOC_GETBUFFERINFO, (unsigned long)&buf_info) != OK)
-        {
-          buf_info.nbuffers    = 2;
-          buf_info.buffer_size = total_bytes / 2 + 64;
-        }
+      syslog(LOG_WARNING,
+             "[%s] GETBUFFERINFO 不可用，用保守默认值 (2 x 4096)\n", LOG_TAG);
+      buf_info.nbuffers    = 2;
+      buf_info.buffer_size = 4096;
     }
+
+  syslog(LOG_INFO, "[%s] 驱动缓冲: %lu 块 x %lu 字节, 本次要送 %lu 字节\n",
+         LOG_TAG, (unsigned long)buf_info.nbuffers,
+         (unsigned long)buf_info.buffer_size, (unsigned long)total_bytes);
 
   nbuffers = (buf_info.nbuffers >= 2) ? 2 : 1;
   chunk    = buf_info.buffer_size;
-  if (chunk == 0 || chunk > total_bytes)
+  if (chunk > total_bytes)
     {
       chunk = total_bytes;
     }
 
-  /* 3. 分配缓冲 */
+  /* 3. 分配缓冲
+   *
+   * 判据是"驱动有没有把指针填上"，**不是** ioctl 的返回值。
+   * 这套实现里 audio_allocbuffer() 在缓冲池用完时返回 0（不是错误），
+   * 而 nxplayer 那种 `!= sizeof(buf_desc)` 的判据会把这种情况误判成失败，
+   * 结果一块缓冲都拿不到、直接放弃播放 —— 板子上"没声音"就是这么来的
+   * （自检报告里那句 AUDIOIOC_ALLOCBUFFER 失败 errno=0 就是它）。
+   * 拿不到更多就用已经拿到的那些，能播多少播多少。 */
 
-  for (i = 0; i < nbuffers; i++)
-    {
-      memset(&buf_desc, 0, sizeof(buf_desc));
-      buf_desc.numbytes  = chunk;
-      buf_desc.u.pbuffer = &buf[i];
+  {
+    int got = 0;
 
-      if (ioctl(g_fd, AUDIOIOC_ALLOCBUFFER, (unsigned long)&buf_desc)
-          != (int)sizeof(buf_desc))
-        {
-          syslog(LOG_ERR, "[%s] ALLOCBUFFER[%d] 失败: %d\n",
-                 LOG_TAG, i, errno);
-          ret = -errno;
-          goto out_free;
-        }
-    }
+    for (i = 0; i < nbuffers; i++)
+      {
+        buf[i] = NULL;
+        memset(&buf_desc, 0, sizeof(buf_desc));
+        buf_desc.numbytes  = chunk;
+        buf_desc.u.pbuffer = &buf[i];
+
+        ret = ioctl(g_fd, AUDIOIOC_ALLOCBUFFER, (unsigned long)&buf_desc);
+        if (ret < 0)
+          {
+            syslog(LOG_ERR, "[%s] ALLOCBUFFER[%d] 出错: ret=%d errno=%d\n",
+                   LOG_TAG, i, ret, errno);
+            diag_note_audio_fail("AUDIOIOC_ALLOCBUFFER", errno ? errno : ret);
+            ret = -errno;
+            goto out_free;
+          }
+
+        if (buf[i] == NULL)
+          {
+            /* 缓冲池已满：不是错误，用已经拿到的就行 */
+
+            syslog(LOG_INFO, "[%s] 缓冲池只给了 %d 块（请求 %d 块）\n",
+                   LOG_TAG, got, nbuffers);
+            break;
+          }
+
+        got++;
+      }
+
+    if (got == 0)
+      {
+        syslog(LOG_ERR, "[%s] 一块缓冲都没拿到，无法播放\n", LOG_TAG);
+        diag_note_audio_fail("AUDIOIOC_ALLOCBUFFER(0)", errno);
+        ret = -ENOMEM;
+        goto out_free;
+      }
+
+    nbuffers = got;
+  }
 
   /* 4. 填数据并入队 */
 
@@ -271,8 +317,9 @@ static int device_play(const int16_t *pcm, uint32_t samples)
       ret = ioctl(g_fd, AUDIOIOC_ENQUEUEBUFFER, (unsigned long)&buf_desc);
       if (ret < 0)
         {
-          syslog(LOG_ERR, "[%s] ENQUEUEBUFFER[%d] 失败: %d\n",
-                 LOG_TAG, i, errno);
+          syslog(LOG_ERR, "[%s] ENQUEUEBUFFER[%d] 出错: ret=%d errno=%d\n",
+                 LOG_TAG, i, ret, errno);
+          diag_note_audio_fail("AUDIOIOC_ENQUEUEBUFFER", errno ? errno : ret);
           ret = -errno;
           goto out_free;
         }
@@ -283,12 +330,30 @@ static int device_play(const int16_t *pcm, uint32_t samples)
   ret = ioctl(g_fd, AUDIOIOC_START, 0);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "[%s] AUDIOIOC_START 失败: %d\n", LOG_TAG, errno);
+      syslog(LOG_ERR, "[%s] AUDIOIOC_START 出错: ret=%d errno=%d\n",
+             LOG_TAG, ret, errno);
+      diag_note_audio_fail("AUDIOIOC_START", errno ? errno : ret);
       ret = -errno;
       goto out_free;
     }
 
   sent    = offset;
+
+  /* 记下"想送多少"和"实送多少"，不等就是被驱动的管线缓冲截断了 */
+
+  g_status.buf_size   = chunk;
+  g_status.buf_count  = (uint32_t)nbuffers;
+  g_status.last_bytes = sent;
+  g_status.last_total = total_bytes;
+
+  if (sent < total_bytes)
+    {
+      syslog(LOG_WARNING,
+             "[%s] 数据被截断: 想送 %lu 字节, 实送 %lu（单块 %lu x %d 块）\n",
+             LOG_TAG, (unsigned long)total_bytes, (unsigned long)sent,
+             (unsigned long)chunk, nbuffers);
+    }
+
   wait_ms = (uint32_t)((uint64_t)sent * 1000 /
                        (SAMPLE_RATE * sizeof(int16_t))) + 150;
   elapsed = 0;

@@ -29,7 +29,12 @@ LV_FONT_DECLARE(sg_font_24);
 
 #define SG_FONT_TEXT    (&sg_font_16)             /* 正文 / 列表 / 按钮 */
 #define SG_FONT_TITLE   (&sg_font_24)             /* 页面标题 */
-#define SG_FONT_CLOCK   (&lv_font_montserrat_48)  /* 大时钟数字 */
-#define SG_FONT_SMALL   (&lv_font_montserrat_16)  /* 纯数字/英文小字 */
+#define SG_FONT_CLOCK   (&lv_font_montserrat_48)  /* 大时钟数字（纯数字） */
+
+/* ⚠️ Montserrat 系列**没有中文字形**，只能用于纯数字/英文。
+ * 拿它显示中文，屏幕上会出现一个个方框（踩过：状态栏的"已联网 50"
+ * 曾误用它，结果"已联网"三个字全变方框）。中文一律用 SG_FONT_TEXT。 */
+
+#define SG_FONT_ASCII_ONLY (&lv_font_montserrat_16)
 
 #endif /* __APP_SILVER_GUARDIAN_HUB_INCLUDE_FONTS_H */

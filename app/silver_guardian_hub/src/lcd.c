@@ -155,17 +155,24 @@ static void build_statusbar(void)
   lv_obj_set_style_bg_color(statusbar, lv_color_hex(COLOR_STATUSBAR_BG), 0);
   lv_obj_set_style_bg_opa(statusbar, LV_OPA_COVER, 0);
 
-  /* 返回按钮（只在子页面显示） */
+  /* 返回按钮（只在子页面显示）
+   * 尺寸从 44x24 放大到 62x28：2.8 寸屏上 44x24 大约 3.5mm x 1.9mm，
+   * 手指很难点中，用户反馈"左上角那个退不出去"很大一部分是这个原因。 */
 
   g_btn_back = lv_button_create(statusbar);
   lv_obj_remove_style_all(g_btn_back);
-  lv_obj_set_size(g_btn_back, 44, 24);
-  lv_obj_align(g_btn_back, LV_ALIGN_LEFT_MID, 4, 0);
+  lv_obj_set_size(g_btn_back, 62, 28);
+  lv_obj_align(g_btn_back, LV_ALIGN_LEFT_MID, 2, 0);
   lv_obj_set_style_bg_color(g_btn_back, lv_color_hex(0x2A3A4A), 0);
   lv_obj_set_style_bg_opa(g_btn_back, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(g_btn_back, 6, 0);
   lv_obj_add_flag(g_btn_back, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(g_btn_back, back_btn_cb, LV_EVENT_CLICKED, NULL);
+
+  /* 按下时变色，让用户知道点到了 */
+
+  lv_obj_set_style_bg_color(g_btn_back, lv_color_hex(0x3E6FA8),
+                            LV_PART_MAIN | LV_STATE_PRESSED);
 
   {
     lv_obj_t *lbl = lv_label_create(g_btn_back);
@@ -183,8 +190,12 @@ static void build_statusbar(void)
   lv_obj_set_style_text_color(g_label_title, lv_color_hex(COLOR_WHITE), 0);
   lv_obj_align(g_label_title, LV_ALIGN_LEFT_MID, 10, 0);
 
+  /* 必须用带中文字形的字体：这里显示的是"已联网 50"，
+   * 之前误用了 SG_FONT_SMALL（Montserrat，纯 ASCII），
+   * 结果"已联网"三个字在屏上是一个个方框，只有数字正常。 */
+
   g_label_net = lv_label_create(statusbar);
-  lv_obj_set_style_text_font(g_label_net, SG_FONT_SMALL, 0);
+  lv_obj_set_style_text_font(g_label_net, SG_FONT_TEXT, 0);
   lv_obj_set_style_text_color(g_label_net, lv_color_hex(COLOR_HIGH), 0);
   lv_obj_align(g_label_net, LV_ALIGN_RIGHT_MID, -6, 0);
 
@@ -379,11 +390,19 @@ void lcd_task(void)
       refresh_statusbar();
     }
 
-  /* 长时间没有任何用户输入 -> 自动进演示模式，保证无触摸时也能演示 */
+  /* 自动进演示模式，但**只在触摸设备根本没产生过任何事件时**才做。
+   *
+   * 这里踩过一个坑：原来只判断"多久没有用户输入"，而 g_last_input_ms 只在
+   * 开机时赋过一次值，用户触摸时没刷新。结果是开机 30 秒后条件恒为真，
+   * 用户点一下关掉演示模式，下一轮循环立刻又打开 —— 页面自己乱跳，什么都干不了。
+   * 现在加两道闸：触摸探针见过事件就永不自动进；且每次用户输入都刷新计时。 */
 
-  if (!g_demo_mode && (uint32_t)(now - g_last_input_ms) >= DEMO_IDLE_MS)
+  if (!g_demo_mode &&
+      touch_probe_get()->samples == 0 &&
+      (uint32_t)(now - g_last_input_ms) >= DEMO_IDLE_MS)
     {
-      syslog(LOG_WARNING, "[%s] %u 秒无输入，自动进入演示模式\n",
+      syslog(LOG_WARNING,
+             "[%s] %u 秒内触摸设备无任何事件，自动进入演示模式\n",
              LOG_TAG, (unsigned)(DEMO_IDLE_MS / 1000));
       lcd_set_demo_mode(true);
     }
@@ -443,7 +462,9 @@ void lcd_set_back_visible(bool visible)
 
   if (g_label_title != NULL)
     {
-      lv_obj_align(g_label_title, LV_ALIGN_LEFT_MID, visible ? 54 : 10, 0);
+      /* 返回按钮宽度 62 + 左边距 2，标题从 68 开始才不重叠 */
+
+      lv_obj_align(g_label_title, LV_ALIGN_LEFT_MID, visible ? 68 : 10, 0);
     }
 }
 
@@ -557,6 +578,11 @@ void lcd_set_demo_mode(bool on)
   g_demo_mode = on;
   ui_set_demo_mode(on);
 
+  /* 不管开还是关都刷新空闲计时：关掉演示模式后若计时不刷新，
+   * 下一轮循环会立刻又判定"空闲超时"把它打开。 */
+
+  g_last_input_ms = lv_tick_get();
+
   if (on)
     {
       g_last_demo_switch_ms = lv_tick_get();
@@ -568,6 +594,11 @@ void lcd_set_demo_mode(bool on)
 bool lcd_get_demo_mode(void)
 {
   return g_demo_mode;
+}
+
+void lcd_notify_input(void)
+{
+  g_last_input_ms = lv_tick_get();
 }
 
 uint32_t lcd_tick_ms(void)

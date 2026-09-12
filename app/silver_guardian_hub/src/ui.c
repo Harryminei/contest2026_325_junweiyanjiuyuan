@@ -132,7 +132,8 @@ static lv_obj_t *g_event_list;
 
 static lv_obj_t *g_set_volume;
 static lv_obj_t *g_set_sit;
-static lv_obj_t *g_set_clock;
+static lv_obj_t *g_set_clock_h;
+static lv_obj_t *g_set_clock_m;
 
 /* 关于页 */
 
@@ -351,6 +352,11 @@ bool ui_get_demo_mode(void)
 
 void ui_notify_user_input(void)
 {
+  /* 先刷新空闲计时——不然关掉演示模式后计时还是旧的，
+   * lcd_task 下一轮立刻又把它打开（这个坑让整个界面都没法用）。 */
+
+  lcd_notify_input();
+
   if (g_demo)
     {
       syslog(LOG_INFO, "[%s] 检测到用户输入，退出演示模式\n", LOG_TAG);
@@ -1014,10 +1020,16 @@ static void settings_refresh(void)
       lv_label_set_text(g_set_sit, buf);
     }
 
-  if (g_set_clock != NULL)
+  if (g_set_clock_h != NULL)
     {
-      snprintf(buf, sizeof(buf), "%02d : %02d", g_set_hour, g_set_minute);
-      lv_label_set_text(g_set_clock, buf);
+      snprintf(buf, sizeof(buf), "%02d 时", g_set_hour);
+      lv_label_set_text(g_set_clock_h, buf);
+    }
+
+  if (g_set_clock_m != NULL)
+    {
+      snprintf(buf, sizeof(buf), "%02d 分", g_set_minute);
+      lv_label_set_text(g_set_clock_m, buf);
     }
 }
 
@@ -1110,51 +1122,55 @@ static void set_apply_cb(lv_event_t *e)
     }
 }
 
+/**
+ * @brief 建一个 [-] 值 [+] 的调节行
+ *
+ * 按钮统一 44x36 —— 2.8 寸屏上小于 40x32 手指就很难点中，
+ * 用户反馈的"触摸不灵敏"有相当一部分是目标太小而不是触摸本身的问题。
+ */
+
+static void build_adjust_row(lv_obj_t *page, int y, const char *name,
+                             lv_obj_t **value_label,
+                             lv_event_cb_t dec_cb, lv_event_cb_t inc_cb,
+                             int value_x)
+{
+  lv_obj_t *b;
+
+  label_make(page, name, SG_FONT_TEXT, COLOR_DIM, LV_ALIGN_TOP_LEFT, 6, y + 8);
+
+  /* 高 32，行距 34 —— 留 2px 缝，相邻两行按钮不会叠在一起 */
+
+  b = btn_make(page, "-", 44, 32, COLOR_CARD_HI, dec_cb, NULL);
+  lv_obj_set_pos(b, 92, y);
+
+  *value_label = label_make(page, "--", SG_FONT_TEXT, COLOR_TEXT,
+                            LV_ALIGN_TOP_LEFT, value_x, y + 8);
+
+  b = btn_make(page, "+", 44, 32, COLOR_CARD_HI, inc_cb, NULL);
+  lv_obj_set_pos(b, 198, y);
+}
+
 static void build_settings(lv_obj_t *page)
 {
   lv_obj_t *b;
 
-  /* 提示音量 */
+  /* 四行调节，每行高 34（按钮 44x32），内容区只有 176 高，
+   * 所以底部按钮放在 y=136 之后，正好占满不重叠。 */
 
-  label_make(page, "提示音量", SG_FONT_TEXT, COLOR_DIM,
-             LV_ALIGN_TOP_LEFT, 8, 6);
-  b = btn_make(page, "-", 34, 30, COLOR_CARD_HI, set_vol_dec_cb, NULL);
-  lv_obj_set_pos(b, 90, 0);
-  g_set_volume = label_make(page, "70", SG_FONT_TEXT, COLOR_TEXT,
-                            LV_ALIGN_TOP_LEFT, 136, 6);
-  b = btn_make(page, "+", 34, 30, COLOR_CARD_HI, set_vol_inc_cb, NULL);
-  lv_obj_set_pos(b, 180, 0);
+  build_adjust_row(page, 0,   "提示音量", &g_set_volume,
+                   set_vol_dec_cb, set_vol_inc_cb, 146);
 
-  /* 久坐阈值 */
+  build_adjust_row(page, 34,  "久坐阈值", &g_set_sit,
+                   set_sit_dec_cb, set_sit_inc_cb, 146);
 
-  label_make(page, "久坐阈值", SG_FONT_TEXT, COLOR_DIM,
-             LV_ALIGN_TOP_LEFT, 8, 44);
-  b = btn_make(page, "-", 34, 30, COLOR_CARD_HI, set_sit_dec_cb, NULL);
-  lv_obj_set_pos(b, 90, 38);
-  g_set_sit = label_make(page, "60 分钟", SG_FONT_TEXT, COLOR_TEXT,
-                         LV_ALIGN_TOP_LEFT, 136, 44);
-  b = btn_make(page, "+", 34, 30, COLOR_CARD_HI, set_sit_inc_cb, NULL);
-  lv_obj_set_pos(b, 180, 38);
+  build_adjust_row(page, 68,  "时钟·时", &g_set_clock_h,
+                   set_hour_dec_cb, set_hour_inc_cb, 146);
 
-  /* 时间校准 */
+  build_adjust_row(page, 102, "时钟·分", &g_set_clock_m,
+                   set_min_dec_cb, set_min_inc_cb, 146);
 
-  label_make(page, "时钟校准", SG_FONT_TEXT, COLOR_DIM,
-             LV_ALIGN_TOP_LEFT, 8, 82);
-  b = btn_make(page, "-", 30, 28, COLOR_CARD_HI, set_hour_dec_cb, NULL);
-  lv_obj_set_pos(b, 90, 76);
-  b = btn_make(page, "+", 30, 28, COLOR_CARD_HI, set_hour_inc_cb, NULL);
-  lv_obj_set_pos(b, 124, 76);
-  g_set_clock = label_make(page, "00 : 00", SG_FONT_TEXT, COLOR_TEXT,
-                           LV_ALIGN_TOP_LEFT, 160, 82);
-  b = btn_make(page, "-", 30, 28, COLOR_CARD_HI, set_min_dec_cb, NULL);
-  lv_obj_set_pos(b, 232, 76);
-  b = btn_make(page, "+", 30, 28, COLOR_CARD_HI, set_min_inc_cb, NULL);
-  lv_obj_set_pos(b, 266, 76);
-
-  /* 应用 */
-
-  b = btn_make(page, "保存并应用", 180, 34, COLOR_ACCENT, set_apply_cb, NULL);
-  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 0, -4);
+  b = btn_make(page, "保存并应用", 170, 38, COLOR_ACCENT, set_apply_cb, NULL);
+  lv_obj_set_pos(b, 75, 136);
 }
 
 /*--------------------------------------------------------------------------
@@ -1472,6 +1488,11 @@ int ui_init(lv_obj_t *content_parent)
                LOG_TAG, g_settings.volume, g_settings.sit_minutes);
       }
   }
+
+  /* 把状态栏的"返回"按钮接到导航栈上。
+   * 之前漏了这一步，g_back_cb 一直是 NULL —— 按钮画出来了但点了没反应。 */
+
+  lcd_set_back_callback(ui_back);
 
   ui_go_home();
 

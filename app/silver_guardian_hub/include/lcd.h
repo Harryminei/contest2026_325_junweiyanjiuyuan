@@ -137,6 +137,12 @@ void lcd_set_demo_mode(bool on);
 bool lcd_get_demo_mode(void);
 
 /**
+ * @brief 通知"用户有输入了"——刷新空闲计时，避免误判为无操作而进演示模式
+ */
+
+void lcd_notify_input(void);
+
+/**
  * @brief 当前毫秒计时（LVGL tick）
  */
 

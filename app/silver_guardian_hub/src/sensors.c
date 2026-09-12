@@ -114,9 +114,13 @@ int sensors_init(void)
 {
   memset(&g_state, 0, sizeof(g_state));
 
+  /* 注意：SHTC3 的温度注册成 SENSOR_TYPE_AMBIENT_TEMP -> "ambient_temp"，
+   * 节点是 /dev/uorb/sensor_ambient_temp0，**不是** sensor_temp0。
+   * 这个是从板子上 `ls /dev/uorb` 实测出来的，写错的话温度永远打不开。 */
+
   g_state.ch[SG_SENSOR_TEMP].name  = "温度";
   g_state.ch[SG_SENSOR_TEMP].unit  = "°C";
-  g_state.ch[SG_SENSOR_TEMP].path  = "/dev/uorb/sensor_temp0";
+  g_state.ch[SG_SENSOR_TEMP].path  = "/dev/uorb/sensor_ambient_temp0";
 
   g_state.ch[SG_SENSOR_HUMI].name  = "湿度";
   g_state.ch[SG_SENSOR_HUMI].unit  = "%";

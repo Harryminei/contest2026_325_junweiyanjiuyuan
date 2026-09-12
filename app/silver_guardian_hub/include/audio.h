@@ -46,10 +46,17 @@ typedef struct
   bool     opened;       /* 播放设备是否打开成功 */
   const char *devpath;   /* 实际使用的设备节点 */
   int      err;          /* 打开失败时的 errno */
-  uint32_t played;       /* 累计播放次数 */
+  uint32_t played;       /* 累计播放成功次数 */
   uint32_t dropped;      /* 因忙/出错被丢弃的次数 */
   bool     playing;      /* 当前是否在播 */
   uint8_t  volume;       /* 音量 0-100（软件增益） */
+
+  /* 下面几个用于判断"是不是被驱动缓冲截断了" */
+
+  uint32_t buf_size;     /* 驱动给的单块缓冲大小（字节） */
+  uint32_t buf_count;    /* 实际拿到的缓冲块数 */
+  uint32_t last_bytes;   /* 上一次实际送出去的字节数 */
+  uint32_t last_total;   /* 上一次想送的字节数（不等就是被截断） */
 } audio_status_t;
 
 /****************************************************************************

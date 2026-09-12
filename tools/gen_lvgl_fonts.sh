@@ -41,11 +41,14 @@ FONT_DIR="${HOME}/lvfont/src"
 FONT_SRC="${SG_FONT_SRC:-${FONT_DIR}/NotoSansSC-Regular.otf}"
 FONT_LICENSE="SIL Open Font License 1.1 (Noto Sans SC / Google Noto Project)"
 
-# 字号 -> bpp 映射。取舍依据：
-#   16px 是正文主力，用 4bpp 抗锯齿，汉字笔画才分得开；
-#   24px 只用于标题，2bpp 省一半体积，大字号下 4 级灰度已够。
+# 字号 -> bpp 映射。取舍依据（**改之前先看空间预算**）：
+#   16px 是正文主力，用 4bpp 抗锯齿，汉字笔画才分得开 -> 约 460KB
+#   24px 只用于标题，用 1bpp -> 约 225KB；若用 2bpp 会到 500KB
+#
+# vela.bin 打包进 bootloader 分区，只有 8MB（16384 扇区 x 512）。
+# 24px 用 2bpp 会直接把固件顶出分区（实测 8.53MB > 8.39MB，烧不进去）。
 SIZES_16="${SG_SIZES_16:-16:4}"
-SIZES_24="${SG_SIZES_24:-24:2}"
+SIZES_24="${SG_SIZES_24:-24:1}"
 
 DO_16=1
 DO_24=1
