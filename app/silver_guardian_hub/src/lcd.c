@@ -1,10 +1,19 @@
 /****************************************************************************
- * Silver Guardian Hub - LCD 界面模块实现
+ * Silver Guardian Hub - 显示层实现
  *
- * 基于 LVGL：
- *   - 绑定 Gemini-S1 的 /dev/lcd0（2.8寸 ILI9341 SPI 屏, 320x240）
- *   - 主界面：状态栏(时间/网络/守护状态) + 大时钟 + 日期 + 状态提示
- *   - 事件警示界面：SOS(红) / 久坐(橙) / 用药(蓝)
+ * 屏幕：2.8 寸 ILI9341 SPI 屏，320x240，绑定 /dev/lcd0
+ * 触摸：GT911 电容触摸，绑定 /dev/input0（LVGL nuttx indev）
+ *
+ * 布局：
+ *   ┌───────────────────────────────┐  0
+ *   │ [返回] 页面标题        联网状态│  32px 状态栏
+ *   ├───────────────────────────────┤  32
+ *   │         页面内容区 320x176    │
+ *   ├───────────────────────────────┤  208
+ *   │         守护状态 / 演示提示    │  32px 底栏
+ *   └───────────────────────────────┘  240
+ *
+ * 警示层挂在 lv_layer_top() 上，不管当前在哪一页都能弹出来。
  ****************************************************************************/
 
 /****************************************************************************
@@ -24,6 +33,9 @@
 #include <lvgl/lvgl.h>
 
 #include "include/lcd.h"
+#include "include/fonts.h"
+#include "include/touch.h"
+#include "include/ui.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -31,116 +43,65 @@
 
 #define LOG_TAG "lcd"
 
-/* 中文字体：开启 CONFIG_LV_FONT_SIMSUN_16_CJK 时使用宋体16，否则回退 Montserrat */
+#define SCREEN_W        320
+#define SCREEN_H        240
+#define STATUSBAR_H     32
+#define FOOTER_H        32
+#define CONTENT_Y       STATUSBAR_H
+#define CONTENT_W       SCREEN_W
+#define CONTENT_H       (SCREEN_H - STATUSBAR_H - FOOTER_H)
 
-#if defined(CONFIG_LV_FONT_SIMSUN_16_CJK)
-#  define FONT_CJK16    (&lv_font_simsun_16_cjk)
-#else
-#  define FONT_CJK16    (&lv_font_montserrat_16)
-#endif
+/* 配色 */
 
-#define FONT_DIGIT48    (&lv_font_montserrat_48)
-#define FONT_TITLE30    (&lv_font_montserrat_30)
-#define FONT_CLOCK30    (&lv_font_montserrat_30)
-#define FONT_TEXT16    (&lv_font_montserrat_16)
+#define COLOR_STATUSBAR_BG   0x102030
+#define COLOR_BG             0x000000
+#define COLOR_WHITE          0xFFFFFF
+#define COLOR_HIGH           0xE6E6E6
+#define COLOR_MID            0xA8A8A8
 
-/* 配色（RGB565 转为 lv_color_hex） */
+#define COLOR_SOS_BG         0xB00000
+#define COLOR_SITTING_BG     0xE06A00
+#define COLOR_MEDICATION_BG  0x1E6FBA
 
-#define COLOR_SOS_BG        0xB00000   /* 深红 */
-#define COLOR_SITTING_BG    0xE06A00   /* 橙 */
-#define COLOR_MEDICATION_BG 0x1E6FBA   /* 蓝 */
-#define COLOR_STATUSBAR_BG  0x102030   /* 深灰蓝 */
-#define COLOR_BG            0x000000   /* 黑 */
-#define COLOR_WHITE         0xFFFFFF
-#define COLOR_HIGH          0xE6E6E6
-#define COLOR_MID           0xA8A8A8
-#define COLOR_DIM           0x6E6E6E
-
-#define ALERT_AUTO_RETURN_MS   (10 * 1000)   /* 警示界面停留上限 10s */
+#define DEMO_IDLE_MS        (30 * 1000)   /* 无输入多久后进演示模式 */
+#define DEMO_PAGE_INTERVAL  (6 * 1000)    /* 演示模式每页停留 */
+#define ALERT_AUTO_HIDE_MS  (15 * 1000)   /* 非 SOS 警示层自动收起 */
 
 /****************************************************************************
  * Private Data
  ****************************************************************************/
 
 static lv_nuttx_result_t g_result;
-static bool g_initialized = false;
+static bool              g_initialized;
 
-/* 主界面对象 */
+static lv_obj_t *g_btn_back;
+static lv_obj_t *g_label_title;
+static lv_obj_t *g_label_net;
+static lv_obj_t *g_label_footer;
+static lv_obj_t *g_content;
 
-static lv_obj_t *g_scr_main = NULL;
-static lv_obj_t *g_label_clock = NULL;    /* 大时钟 */
-static lv_obj_t *g_label_date = NULL;     /* 日期 */
-static lv_obj_t *g_label_status = NULL;   /* 底部守护状态 */
-static lv_obj_t *g_label_net = NULL;      /* 右上网络状态 */
+static lv_obj_t      *g_alert_layer;
+static lv_obj_t      *g_alert_title;
+static lv_obj_t      *g_alert_body;
+static lv_obj_t      *g_alert_kind_label;
+static lcd_alert_t    g_alert_kind = LCD_ALERT_NONE;
+static uint32_t       g_alert_shown_ms;
+static lcd_back_cb_t  g_back_cb;
 
-/* 警示界面对象 */
+static char   g_title[32]  = "银发守护";
+static char   g_footer[64] = "守护中";
+static bool   g_net_connected = true;
+static int8_t g_net_signal    = -50;
 
-static lv_obj_t *g_scr_alert = NULL;
-static lv_obj_t *g_label_alert_title = NULL;
-static lv_obj_t *g_label_alert_body = NULL;
-static lv_obj_t *g_label_alert_hint = NULL;
-
-static lcd_view_t g_view = LCD_VIEW_MAIN;
-static char g_status_text[64] = "守护中";
-static bool g_net_connected = true;
-static int8_t g_net_signal = -50;
-static uint32_t g_alert_show_ms = 0;
+static bool     g_demo_mode;
+static uint32_t g_last_input_ms;
+static uint32_t g_last_demo_switch_ms;
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
 
-/* 主界面按钮——boardctl 初始化显示驱动 */
-
-#define NEED_BOARDINIT 0
-
-#if defined(CONFIG_BOARDCTL) && !defined(CONFIG_NSH_ARCHINIT)
-#  undef  NEED_BOARDINIT
-#  define NEED_BOARDINIT 1
-#endif
-
-static uint32_t current_ms(void)
-{
-  return (uint32_t)lv_tick_get();
-}
-
-/**
- * @brief 更新时间标签（时钟 + 日期）
- */
-
-static void refresh_clock(void)
-{
-  time_t now;
-  struct tm *tm;
-  char buf[64];
-
-  if (g_label_clock == NULL)
-    {
-      return;
-    }
-
-  now = time(NULL);
-  tm = localtime(&now);
-
-  snprintf(buf, sizeof(buf), "%02d:%02d", tm->tm_hour, tm->tm_min);
-  lv_label_set_text(g_label_clock, buf);
-
-  snprintf(buf, sizeof(buf), "%d月%d日 星期%s",
-           tm->tm_mon + 1, tm->tm_mday,
-           (tm->tm_wday == 0) ? "日" :
-           (tm->tm_wday == 1) ? "一" :
-           (tm->tm_wday == 2) ? "二" :
-           (tm->tm_wday == 3) ? "三" :
-           (tm->tm_wday == 4) ? "四" :
-           (tm->tm_wday == 5) ? "五" : "六");
-  lv_label_set_text(g_label_date, buf);
-}
-
-/**
- * @brief 刷新网络状态标签
- */
-
-static void refresh_net(void)
+static void refresh_statusbar(void)
 {
   char buf[32];
 
@@ -155,128 +116,141 @@ static void refresh_net(void)
     }
   else
     {
-      snprintf(buf, sizeof(buf), "未联网");
+      snprintf(buf, sizeof(buf), "离线");
     }
 
   lv_label_set_text(g_label_net, buf);
 }
 
+static void back_btn_cb(lv_event_t *e)
+{
+  (void)e;
+
+  ui_notify_user_input();
+
+  if (g_back_cb != NULL)
+    {
+      g_back_cb();
+    }
+}
+
+static void alert_dismiss_cb(lv_event_t *e)
+{
+  (void)e;
+
+  ui_notify_user_input();
+  lcd_clear_alert();
+}
+
 /**
- * @brief 创建主界面
+ * @brief 建顶部状态栏
  */
 
-static void build_main_screen(void)
+static void build_statusbar(void)
 {
-  lv_obj_t *statusbar;
-  lv_obj_t *title;
-
-  g_scr_main = lv_obj_create(NULL);
-  lv_obj_remove_style_all(g_scr_main);
-  lv_obj_set_style_bg_color(g_scr_main, lv_color_hex(COLOR_BG), 0);
-  lv_obj_set_style_bg_opa(g_scr_main, LV_OPA_COVER, 0);
-
-  /* 顶栏：标题 + 网络状态 */
-
-  statusbar = lv_obj_create(g_scr_main);
+  lv_obj_t *statusbar = lv_obj_create(lv_screen_active());
   lv_obj_remove_style_all(statusbar);
-  lv_obj_set_size(statusbar, LV_PCT(100), 36);
+  lv_obj_set_size(statusbar, SCREEN_W, STATUSBAR_H);
   lv_obj_set_pos(statusbar, 0, 0);
   lv_obj_set_style_bg_color(statusbar, lv_color_hex(COLOR_STATUSBAR_BG), 0);
   lv_obj_set_style_bg_opa(statusbar, LV_OPA_COVER, 0);
 
-  title = lv_label_create(statusbar);
-  lv_label_set_text(title, "银发守护");
-  lv_obj_set_style_text_font(title, FONT_CJK16, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(COLOR_WHITE), 0);
-  lv_obj_align(title, LV_ALIGN_LEFT_MID, 10, 0);
+  /* 返回按钮（只在子页面显示） */
+
+  g_btn_back = lv_button_create(statusbar);
+  lv_obj_remove_style_all(g_btn_back);
+  lv_obj_set_size(g_btn_back, 44, 24);
+  lv_obj_align(g_btn_back, LV_ALIGN_LEFT_MID, 4, 0);
+  lv_obj_set_style_bg_color(g_btn_back, lv_color_hex(0x2A3A4A), 0);
+  lv_obj_set_style_bg_opa(g_btn_back, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(g_btn_back, 6, 0);
+  lv_obj_add_flag(g_btn_back, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(g_btn_back, back_btn_cb, LV_EVENT_CLICKED, NULL);
+
+  {
+    lv_obj_t *lbl = lv_label_create(g_btn_back);
+    lv_label_set_text(lbl, "< 返回");
+    lv_obj_set_style_text_font(lbl, SG_FONT_TEXT, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(COLOR_WHITE), 0);
+    lv_obj_center(lbl);
+  }
+
+  lv_obj_add_flag(g_btn_back, LV_OBJ_FLAG_HIDDEN);
+
+  g_label_title = lv_label_create(statusbar);
+  lv_label_set_text(g_label_title, g_title);
+  lv_obj_set_style_text_font(g_label_title, SG_FONT_TITLE, 0);
+  lv_obj_set_style_text_color(g_label_title, lv_color_hex(COLOR_WHITE), 0);
+  lv_obj_align(g_label_title, LV_ALIGN_LEFT_MID, 10, 0);
 
   g_label_net = lv_label_create(statusbar);
-  lv_obj_set_style_text_font(g_label_net, FONT_TEXT16, 0);
+  lv_obj_set_style_text_font(g_label_net, SG_FONT_SMALL, 0);
   lv_obj_set_style_text_color(g_label_net, lv_color_hex(COLOR_HIGH), 0);
-  lv_obj_align(g_label_net, LV_ALIGN_RIGHT_MID, -10, 0);
-  refresh_net();
+  lv_obj_align(g_label_net, LV_ALIGN_RIGHT_MID, -6, 0);
 
-  /* 大时钟 */
+  refresh_statusbar();
+}
 
-  g_label_clock = lv_label_create(g_scr_main);
-  lv_obj_set_style_text_font(g_label_clock, FONT_DIGIT48, 0);
-  lv_obj_set_style_text_color(g_label_clock, lv_color_hex(COLOR_WHITE), 0);
-  lv_obj_align(g_label_clock, LV_ALIGN_CENTER, 0, -36);
-
-  /* 日期 */
-
-  g_label_date = lv_label_create(g_scr_main);
-  lv_obj_set_style_text_font(g_label_date, FONT_CJK16, 0);
-  lv_obj_set_style_text_color(g_label_date, lv_color_hex(COLOR_MID), 0);
-  lv_obj_align(g_label_date, LV_ALIGN_CENTER, 0, 12);
-
-  /* 底部守护状态 */
-
-  g_label_status = lv_label_create(g_scr_main);
-  lv_obj_set_style_text_font(g_label_status, FONT_TEXT16, 0);
-  lv_obj_set_style_text_color(g_label_status, lv_color_hex(COLOR_HIGH), 0);
-  lv_label_set_text(g_label_status, g_status_text);
-  lv_obj_align(g_label_status, LV_ALIGN_BOTTOM_MID, 0, -20);
-
-  refresh_clock();
+static void build_footer(void)
+{
+  g_label_footer = lv_label_create(lv_screen_active());
+  lv_obj_set_style_text_font(g_label_footer, SG_FONT_TEXT, 0);
+  lv_obj_set_style_text_color(g_label_footer, lv_color_hex(COLOR_MID), 0);
+  lv_label_set_text(g_label_footer, g_footer);
+  lv_obj_align(g_label_footer, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
 /**
- * @brief 创建警示界面（复用，切换底色与文案）
+ * @brief 建警示覆盖层
  */
 
-static void build_alert_screen(void)
+static void build_alert_layer(void)
 {
-  g_scr_alert = lv_obj_create(NULL);
-  lv_obj_remove_style_all(g_scr_alert);
-  lv_obj_set_style_bg_opa(g_scr_alert, LV_OPA_COVER, 0);
+  lv_obj_t *btn;
+  lv_obj_t *lbl;
 
-  g_label_alert_title = lv_label_create(g_scr_alert);
-  lv_obj_set_style_text_font(g_label_alert_title, FONT_TITLE30, 0);
-  lv_obj_set_style_text_color(g_label_alert_title,
-                              lv_color_hex(COLOR_WHITE), 0);
-  lv_obj_align(g_label_alert_title, LV_ALIGN_CENTER, 0, -60);
+  g_alert_layer = lv_obj_create(lv_layer_top());
+  lv_obj_remove_style_all(g_alert_layer);
+  lv_obj_set_size(g_alert_layer, SCREEN_W, SCREEN_H);
+  lv_obj_set_pos(g_alert_layer, 0, 0);
+  lv_obj_set_style_bg_opa(g_alert_layer, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(g_alert_layer, lv_color_hex(COLOR_SOS_BG), 0);
+  lv_obj_add_flag(g_alert_layer, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_remove_flag(g_alert_layer, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(g_alert_layer, LV_OBJ_FLAG_CLICKABLE);
 
-  g_label_alert_body = lv_label_create(g_scr_alert);
-  lv_obj_set_style_text_font(g_label_alert_body, FONT_CJK16, 0);
-  lv_obj_set_style_text_color(g_label_alert_body,
-                              lv_color_hex(COLOR_WHITE), 0);
-  lv_obj_align(g_label_alert_body, LV_ALIGN_CENTER, 0, 10);
+  g_alert_kind_label = lv_label_create(g_alert_layer);
+  lv_obj_set_style_text_font(g_alert_kind_label, SG_FONT_TEXT, 0);
+  lv_obj_set_style_text_color(g_alert_kind_label, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_align(g_alert_kind_label, LV_ALIGN_TOP_MID, 0, 12);
 
-  g_label_alert_hint = lv_label_create(g_scr_alert);
-  lv_obj_set_style_text_font(g_label_alert_hint, FONT_TEXT16, 0);
-  lv_obj_set_style_text_color(g_label_alert_hint,
-                              lv_color_hex(COLOR_HIGH), 0);
-  lv_obj_align(g_label_alert_hint, LV_ALIGN_BOTTOM_MID, 0, -24);
+  g_alert_title = lv_label_create(g_alert_layer);
+  lv_obj_set_style_text_font(g_alert_title, SG_FONT_TITLE, 0);
+  lv_obj_set_style_text_color(g_alert_title, lv_color_hex(COLOR_WHITE), 0);
+  lv_obj_align(g_alert_title, LV_ALIGN_CENTER, 0, -44);
 
-  g_view = LCD_VIEW_MAIN;
-}
+  g_alert_body = lv_label_create(g_alert_layer);
+  lv_obj_set_style_text_font(g_alert_body, SG_FONT_TEXT, 0);
+  lv_obj_set_style_text_color(g_alert_body, lv_color_hex(COLOR_WHITE), 0);
+  lv_obj_set_style_text_align(g_alert_body, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_width(g_alert_body, SCREEN_W - 40);
+  lv_obj_align(g_alert_body, LV_ALIGN_CENTER, 0, 8);
 
-/**
- * @brief 进入警示界面
- * @param bg_color 背景色
- * @param title 标题
- * @param body 正文
- * @param view 视图类型
- */
+  btn = lv_button_create(g_alert_layer);
+  lv_obj_remove_style_all(btn);
+  lv_obj_set_size(btn, 150, 44);
+  lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -20);
+  lv_obj_set_style_bg_color(btn, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_bg_opa(btn, LV_OPA_90, 0);
+  lv_obj_set_style_radius(btn, 10, 0);
+  lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(btn, alert_dismiss_cb, LV_EVENT_CLICKED, NULL);
 
-static void show_alert(uint32_t bg_color, const char *title,
-                       const char *body, lcd_view_t view)
-{
-  if (!g_initialized || g_scr_alert == NULL)
-    {
-      return;
-    }
-
-  lv_obj_set_style_bg_color(g_scr_alert, lv_color_hex(bg_color), 0);
-  lv_label_set_text(g_label_alert_title, title ? title : "");
-  lv_label_set_text(g_label_alert_body, body ? body : "");
-  lv_label_set_text(g_label_alert_hint, "正在提醒...");
-
-  g_view = view;
-  g_alert_show_ms = current_ms();
-
-  lv_scr_load(g_scr_alert);
+  lbl = lv_label_create(btn);
+  lv_label_set_text(lbl, "知道了");
+  lv_obj_set_style_text_font(lbl, SG_FONT_TITLE, 0);
+  lv_obj_set_style_text_color(lbl, lv_color_hex(0x202020), 0);
+  lv_obj_center(lbl);
 }
 
 /****************************************************************************
@@ -286,44 +260,20 @@ static void show_alert(uint32_t bg_color, const char *title,
 int silver_lcd_init(void)
 {
   lv_nuttx_dsc_t info;
+  lv_obj_t *scr;
 
   syslog(LOG_INFO, "[%s] Initializing LCD system\n", LOG_TAG);
 
-  /* 若 LVGL 已初始化，直接复用（单一全局实例） */
-
   if (lv_is_initialized())
     {
-      /* LVGL 已被系统初始化，复用默认 display 并接管画出界面 */
-      g_result.disp = lv_display_get_default();
-      if (g_result.disp == NULL)
-        {
-          syslog(LOG_ERR, "[%s] LVGL display attach failed!\n", LOG_TAG);
-          return -ENODEV;
-        }
-
-      build_main_screen();
-      build_alert_screen();
-      lv_scr_load(g_scr_main);
-
-      g_initialized = true;
-      g_view = LCD_VIEW_MAIN;
-
-      syslog(LOG_INFO, "[%s] LCD system initialized (reuse, %dx%d)\n",
-             LOG_TAG,
-             (int)lv_display_get_horizontal_resolution(g_result.disp),
-             (int)lv_display_get_vertical_resolution(g_result.disp));
-
       return OK;
     }
 
-#if NEED_BOARDINIT
-  /* 执行板级显示驱动初始化 */
+  /* 触摸探针先起来：即使 LVGL indev 建不起来，也能拿到原始触摸数据 */
 
-  boardctl(BOARDIOC_INIT, 0);
-#endif
+  touch_probe_init();
 
   lv_init();
-
   lv_nuttx_dsc_init(&info);
 
 #ifdef CONFIG_LV_USE_NUTTX_LCD
@@ -334,23 +284,54 @@ int silver_lcd_init(void)
 
   if (g_result.disp == NULL)
     {
-      syslog(LOG_ERR, "[%s] LVGL display attach failed!\n", LOG_TAG);
+      syslog(LOG_ERR, "[%s] LVGL 显示绑定失败，界面无法显示\n", LOG_TAG);
       return -ENODEV;
     }
 
-  /* 创建界面 */
+  scr = lv_screen_active();
+  lv_obj_remove_style_all(scr);
+  lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), 0);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
-  build_main_screen();
-  build_alert_screen();
-  lv_scr_load(g_scr_main);
+  build_statusbar();
 
-  g_initialized = true;
-  g_view = LCD_VIEW_MAIN;
+  /* 内容区：所有页面的父容器 */
 
-  syslog(LOG_INFO, "[%s] LCD system initialized (screen %dx%d)\n",
+  g_content = lv_obj_create(scr);
+  lv_obj_remove_style_all(g_content);
+  lv_obj_set_size(g_content, CONTENT_W, CONTENT_H);
+  lv_obj_set_pos(g_content, 0, CONTENT_Y);
+  lv_obj_set_style_bg_color(g_content, lv_color_hex(COLOR_BG), 0);
+  lv_obj_set_style_bg_opa(g_content, LV_OPA_COVER, 0);
+
+  build_footer();
+  build_alert_layer();
+
+  if (ui_init(g_content) != 0)
+    {
+      syslog(LOG_ERR, "[%s] 页面初始化失败\n", LOG_TAG);
+      return -EINVAL;
+    }
+
+  g_initialized         = true;
+  g_last_input_ms       = lv_tick_get();
+  g_last_demo_switch_ms = g_last_input_ms;
+
+  if (g_result.indev == NULL)
+    {
+      /* LVGL 没拿到触摸设备 —— 直接进演示模式，否则屏幕上什么都点不了 */
+
+      syslog(LOG_WARNING,
+             "[%s] LVGL 触摸设备不可用，进入演示模式（页面自动轮播）\n",
+             LOG_TAG);
+      lcd_set_demo_mode(true);
+    }
+
+  syslog(LOG_INFO, "[%s] LCD system initialized (screen %dx%d, indev=%s)\n",
          LOG_TAG,
          (int)lv_display_get_horizontal_resolution(g_result.disp),
-         (int)lv_display_get_vertical_resolution(g_result.disp));
+         (int)lv_display_get_vertical_resolution(g_result.disp),
+         (g_result.indev != NULL) ? "ok" : "none");
 
   return OK;
 }
@@ -362,23 +343,24 @@ void lcd_deinit(void)
       return;
     }
 
+  touch_probe_deinit();
   lv_nuttx_deinit(&g_result);
   lv_deinit();
 
-  g_initialized = false;
-  g_label_clock = NULL;
-  g_label_date = NULL;
-  g_label_status = NULL;
-  g_label_net = NULL;
-  g_scr_main = NULL;
-  g_scr_alert = NULL;
+  g_initialized  = false;
+  g_btn_back     = NULL;
+  g_label_title  = NULL;
+  g_label_net    = NULL;
+  g_label_footer = NULL;
+  g_content      = NULL;
+  g_alert_layer  = NULL;
 
   syslog(LOG_INFO, "[%s] LCD system deinitialized\n", LOG_TAG);
 }
 
 void lcd_task(void)
 {
-  static uint32_t last_clock = 0;
+  static uint32_t last_clock;
   uint32_t now;
 
   if (!g_initialized)
@@ -386,127 +368,209 @@ void lcd_task(void)
       return;
     }
 
+  touch_probe_poll();
   lv_timer_handler();
 
-  now = current_ms();
+  now = lv_tick_get();
 
-  /* 每 1 秒刷新时钟 / 网络 */
-
-  if (now - last_clock >= 1000)
+  if ((uint32_t)(now - last_clock) >= 1000)
     {
       last_clock = now;
-      refresh_clock();
-      refresh_net();
+      refresh_statusbar();
     }
 
-  /* 警示界面超时自动返回主界面 */
+  /* 长时间没有任何用户输入 -> 自动进演示模式，保证无触摸时也能演示 */
 
-  if (g_view != LCD_VIEW_MAIN &&
-      now - g_alert_show_ms >= ALERT_AUTO_RETURN_MS)
+  if (!g_demo_mode && (uint32_t)(now - g_last_input_ms) >= DEMO_IDLE_MS)
+    {
+      syslog(LOG_WARNING, "[%s] %u 秒无输入，自动进入演示模式\n",
+             LOG_TAG, (unsigned)(DEMO_IDLE_MS / 1000));
+      lcd_set_demo_mode(true);
+    }
+
+  if (g_demo_mode &&
+      (uint32_t)(now - g_last_demo_switch_ms) >= DEMO_PAGE_INTERVAL)
+    {
+      g_last_demo_switch_ms = now;
+      ui_navigate((ui_page_t)((ui_current_page() + 1) % UI_PAGE_COUNT));
+    }
+
+  /* 非 SOS 的警示层超时自动收起 */
+
+  if (g_alert_kind != LCD_ALERT_NONE &&
+      g_alert_kind != LCD_ALERT_SOS &&
+      (uint32_t)(now - g_alert_shown_ms) >= ALERT_AUTO_HIDE_MS)
     {
       lcd_clear_alert();
     }
 }
 
-void lcd_update_status(void)
+/*--------------------------------------------------------------------------
+ * 状态栏
+ *------------------------------------------------------------------------*/
+
+void lcd_set_title(const char *text)
 {
-  if (!g_initialized)
+  if (text == NULL)
     {
       return;
     }
 
-  refresh_clock();
-  refresh_net();
+  strncpy(g_title, text, sizeof(g_title) - 1);
+  g_title[sizeof(g_title) - 1] = '\0';
 
-  if (g_label_status != NULL && g_view == LCD_VIEW_MAIN)
+  if (g_label_title != NULL)
     {
-      lv_label_set_text(g_label_status, g_status_text);
+      lv_label_set_text(g_label_title, g_title);
     }
 }
 
-void lcd_show_sos(void)
+void lcd_set_back_visible(bool visible)
 {
-  show_alert(COLOR_SOS_BG, "紧急求助！",
-             "SOS 已发出\n正在通知家属...", LCD_VIEW_SOS);
-
-  syslog(LOG_INFO, "[%s] SOS alert shown on screen\n", LOG_TAG);
-}
-
-void lcd_show_sitting(uint32_t minutes)
-{
-  char body[64];
-
-  snprintf(body, sizeof(body), "您已静坐 %lu 分钟\n请起身活动一下",
-           (unsigned long)minutes);
-
-  show_alert(COLOR_SITTING_BG, "久坐提醒", body, LCD_VIEW_SITTING);
-
-  syslog(LOG_INFO, "[%s] Sitting alert shown on screen\n", LOG_TAG);
-}
-
-void lcd_show_medication(const char *name, uint8_t dosage,
-                         const char *unit)
-{
-  char body[64];
-
-  if (dosage > 0)
+  if (g_btn_back == NULL)
     {
-      snprintf(body, sizeof(body), "请服用 %s %d%s",
-               name ? name : "药物", (int)dosage,
-               unit ? unit : "粒");
+      return;
+    }
+
+  if (visible)
+    {
+      lv_obj_remove_flag(g_btn_back, LV_OBJ_FLAG_HIDDEN);
     }
   else
     {
-      snprintf(body, sizeof(body), "请服用 %s",
-               name ? name : "药物");
+      lv_obj_add_flag(g_btn_back, LV_OBJ_FLAG_HIDDEN);
     }
 
-  show_alert(COLOR_MEDICATION_BG, "用药提醒", body, LCD_VIEW_MEDICATION);
-
-  syslog(LOG_INFO, "[%s] Medication alert shown on screen\n", LOG_TAG);
+  if (g_label_title != NULL)
+    {
+      lv_obj_align(g_label_title, LV_ALIGN_LEFT_MID, visible ? 54 : 10, 0);
+    }
 }
 
-void lcd_clear_alert(void)
+void lcd_set_back_callback(lcd_back_cb_t cb)
 {
-  if (!g_initialized || g_scr_main == NULL)
-    {
-      return;
-    }
-
-  lv_scr_load(g_scr_main);
-  g_view = LCD_VIEW_MAIN;
-
-  lcd_update_status();
-}
-
-void lcd_set_status(const char *text)
-{
-  strncpy(g_status_text, text ? text : "守护中", sizeof(g_status_text) - 1);
-  g_status_text[sizeof(g_status_text) - 1] = '\0';
-
-  if (g_label_status != NULL)
-    {
-      lv_label_set_text(g_label_status, g_status_text);
-    }
+  g_back_cb = cb;
 }
 
 void lcd_set_network(bool connected, int8_t signal)
 {
   g_net_connected = connected;
-  g_net_signal = signal;
+  g_net_signal    = signal;
+  refresh_statusbar();
+}
 
-  if (g_label_net != NULL)
+void lcd_set_guard_status(const char *text)
+{
+  if (text == NULL)
     {
-      refresh_net();
+      return;
     }
+
+  strncpy(g_footer, text, sizeof(g_footer) - 1);
+  g_footer[sizeof(g_footer) - 1] = '\0';
+
+  if (g_label_footer != NULL)
+    {
+      lv_label_set_text(g_label_footer, g_footer);
+    }
+}
+
+/*--------------------------------------------------------------------------
+ * 警示层
+ *------------------------------------------------------------------------*/
+
+void lcd_show_alert(lcd_alert_t kind, const char *title, const char *body)
+{
+  uint32_t bg;
+  const char *kind_text;
+
+  if (!g_initialized || g_alert_layer == NULL)
+    {
+      return;
+    }
+
+  switch (kind)
+    {
+      case LCD_ALERT_SOS:
+        bg = COLOR_SOS_BG;
+        kind_text = "紧急情况";
+        break;
+
+      case LCD_ALERT_SITTING:
+        bg = COLOR_SITTING_BG;
+        kind_text = "健康提醒";
+        break;
+
+      case LCD_ALERT_MEDICATION:
+        bg = COLOR_MEDICATION_BG;
+        kind_text = "用药提醒";
+        break;
+
+      default:
+        bg = COLOR_STATUSBAR_BG;
+        kind_text = "";
+        break;
+    }
+
+  lv_obj_set_style_bg_color(g_alert_layer, lv_color_hex(bg), 0);
+  lv_label_set_text(g_alert_kind_label, kind_text);
+  lv_label_set_text(g_alert_title, title ? title : "");
+  lv_label_set_text(g_alert_body, body ? body : "");
+
+  g_alert_kind     = kind;
+  g_alert_shown_ms = lv_tick_get();
+
+  lv_obj_remove_flag(g_alert_layer, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(g_alert_layer);
+
+  syslog(LOG_INFO, "[%s] 警示层弹出: kind=%d title=%s\n",
+         LOG_TAG, (int)kind, title ? title : "");
+}
+
+void lcd_clear_alert(void)
+{
+  if (g_alert_layer == NULL)
+    {
+      return;
+    }
+
+  lv_obj_add_flag(g_alert_layer, LV_OBJ_FLAG_HIDDEN);
+  g_alert_kind = LCD_ALERT_NONE;
 }
 
 bool lcd_is_alert_active(void)
 {
-  return g_view != LCD_VIEW_MAIN;
+  return g_alert_kind != LCD_ALERT_NONE;
 }
 
-lcd_view_t lcd_get_view(void)
+/*--------------------------------------------------------------------------
+ * 触摸与演示模式
+ *------------------------------------------------------------------------*/
+
+bool lcd_touch_ready(void)
 {
-  return g_view;
+  return g_result.indev != NULL;
+}
+
+void lcd_set_demo_mode(bool on)
+{
+  g_demo_mode = on;
+  ui_set_demo_mode(on);
+
+  if (on)
+    {
+      g_last_demo_switch_ms = lv_tick_get();
+    }
+
+  lcd_set_guard_status(on ? "演示模式 · 触摸屏幕退出" : "守护中");
+}
+
+bool lcd_get_demo_mode(void)
+{
+  return g_demo_mode;
+}
+
+uint32_t lcd_tick_ms(void)
+{
+  return (uint32_t)lv_tick_get();
 }

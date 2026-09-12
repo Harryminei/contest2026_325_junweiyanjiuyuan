@@ -35,6 +35,10 @@
 #define EVENT_PRIORITY_HIGH         2
 #define EVENT_PRIORITY_CRITICAL     3
 
+/* 事件历史条数（事件记录页显示用） */
+
+#define EVENT_HISTORY_SIZE          32
+
 /****************************************************************************
  * Public Types
  ****************************************************************************/
@@ -137,5 +141,26 @@ int event_get_count(void);
  */
 
 void event_clear_queue(void);
+
+/**
+ * @brief 取事件历史（已分发过的事件，最新的在前）
+ * @param out       输出数组
+ * @param max_count 数组容量
+ * @return 实际写入条数
+ */
+
+int event_get_history(event_t *out, int max_count);
+
+/**
+ * @brief 清空事件历史
+ */
+
+void event_clear_history(void);
+
+/**
+ * @brief 事件类型对应的中文名（事件记录页显示用）
+ */
+
+const char *event_type_name(uint8_t type);
 
 #endif /* __APP_SILVER_GUARDIAN_HUB_INCLUDE_EVENT_H */

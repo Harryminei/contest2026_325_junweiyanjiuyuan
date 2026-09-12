@@ -97,8 +97,24 @@ fi
 
 echo ""
 echo "  关键字符串校验（确认新代码真的进了固件）："
-for marker in "Initializing LCD system" "silver_hub" "Silver Guardian Hub"; do
-  if strings "$VELA" | grep -qF "$marker"; then
+
+# 注意：build.sh 用 unionfs-fuse 做构建视图，刚结束时偶发"stat 已是新文件、
+# strings 仍读到旧内容"。所以先取一次，缺就等 2 秒重取，避免误报"没编进去"。
+
+strings "$VELA" > "${LOG}.strings"
+need_retry=0
+for marker in "Initializing LCD system" "silver_hub" "银发守护"; do
+  grep -qF "$marker" "${LOG}.strings" || need_retry=1
+done
+
+if [ "$need_retry" -eq 1 ]; then
+  echo "    (首次未命中，等 2 秒重取一次…)"
+  sleep 2
+  strings "$VELA" > "${LOG}.strings"
+fi
+
+for marker in "Initializing LCD system" "silver_hub" "银发守护"; do
+  if grep -qF "$marker" "${LOG}.strings"; then
     echo "    [有] $marker"
   else
     echo "    [无] $marker   <- 若这是你新加的字符串，说明没编进去"

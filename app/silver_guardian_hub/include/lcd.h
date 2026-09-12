@@ -1,8 +1,11 @@
 /****************************************************************************
- * Silver Guardian Hub - LCD 界面模块头文件
+ * Silver Guardian Hub - 显示层头文件
  *
- * 基于 LVGL 的界面层：主界面(时间/状态) + 事件警示界面(SOS/久坐/用药)
- * 硬件平台：润芯微 Gemini-S1（2.8寸 ILI9341 SPI 屏, 320x240）
+ * 本文件负责的是"底座"：LVGL 初始化、显示与输入的绑定、顶部状态栏、
+ * 以及盖在所有页面之上的警示层（SOS / 久坐 / 用药）。
+ * 具体页面在 ui.c 里，通过 ui_init() 挂到内容区上。
+ *
+ * 硬件：润芯微 Gemini-S1 + 2.8 寸 ILI9341 SPI 屏（320x240）+ GT911 电容触摸
  ****************************************************************************/
 
 #ifndef __APP_SILVER_GUARDIAN_HUB_INCLUDE_LCD_H
@@ -20,101 +23,123 @@
  * Public Types
  ****************************************************************************/
 
-/* 界面视图类型 */
+/* 警示类型（决定警示层配色与图标） */
 
 typedef enum
 {
-  LCD_VIEW_MAIN = 0,      /* 主界面 */
-  LCD_VIEW_SOS,           /* SOS 紧急呼救 */
-  LCD_VIEW_SITTING,       /* 久坐提醒 */
-  LCD_VIEW_MEDICATION     /* 用药提醒 */
-} lcd_view_t;
+  LCD_ALERT_NONE = 0,
+  LCD_ALERT_SOS,          /* 红：紧急求助 */
+  LCD_ALERT_SITTING,      /* 橙：久坐提醒 */
+  LCD_ALERT_MEDICATION    /* 蓝：用药提醒 */
+} lcd_alert_t;
+
+/* 顶部返回按钮回调 */
+
+typedef void (*lcd_back_cb_t)(void);
 
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
 
 /**
- * @brief 初始化 LCD 界面（LVGL + 显示绑定 + 界面创建）
+ * @brief 初始化显示层（LVGL + /dev/lcd0 + /dev/input0 + 触摸探针 + 页面）
  * @return 0 成功；负值失败
  */
 
 int silver_lcd_init(void);
 
 /**
- * @brief 反初始化 LCD 界面
+ * @brief 反初始化显示层
  */
 
 void lcd_deinit(void);
 
 /**
- * @brief 主循环调用：驱动 LVGL 定时器并刷新时钟
+ * @brief 主循环调用：驱动 LVGL、轮询触摸探针、处理演示模式
  */
 
 void lcd_task(void);
 
+/*--------------------------------------------------------------------------
+ * 顶部状态栏
+ *------------------------------------------------------------------------*/
+
 /**
- * @brief 刷新状态栏（时钟 / WiFi 状态 / 守护状态）
+ * @brief 设置状态栏标题
  */
 
-void lcd_update_status(void);
+void lcd_set_title(const char *text);
 
 /**
- * @brief 显示 SOS 紧急呼救界面
+ * @brief 显示/隐藏状态栏左侧的"返回"按钮
  */
 
-void lcd_show_sos(void);
+void lcd_set_back_visible(bool visible);
 
 /**
- * @brief 显示久坐提醒界面
- * @param minutes 已久坐分钟数
+ * @brief 注册"返回"按钮回调
  */
 
-void lcd_show_sitting(uint32_t minutes);
+void lcd_set_back_callback(lcd_back_cb_t cb);
 
 /**
- * @brief 显示用药提醒界面
- * @param name 药品名称
- * @param dosage 剂量
- * @param unit 单位
- */
-
-void lcd_show_medication(const char *name, uint8_t dosage,
-                         const char *unit);
-
-/**
- * @brief 退出警示界面，返回主界面
- */
-
-void lcd_clear_alert(void);
-
-/**
- * @brief 设置状态栏文字（如"守护中"）
- * @param text 状态文字
- */
-
-void lcd_set_status(const char *text);
-
-/**
- * @brief 设置 WiFi / 云端连接状态
- * @param connected 是否连接
- * @param signal 信号强度(dBm)
+ * @brief 设置网络状态显示
  */
 
 void lcd_set_network(bool connected, int8_t signal);
 
 /**
- * @brief 是否有警示界面正在显示
- * @return true 是
+ * @brief 设置底部守护状态文字
+ */
+
+void lcd_set_guard_status(const char *text);
+
+/*--------------------------------------------------------------------------
+ * 警示层
+ *------------------------------------------------------------------------*/
+
+/**
+ * @brief 弹出警示层
+ * @param kind  警示类型（决定配色）
+ * @param title 标题
+ * @param body  正文（可含 \n）
+ */
+
+void lcd_show_alert(lcd_alert_t kind, const char *title, const char *body);
+
+/**
+ * @brief 收起警示层
+ */
+
+void lcd_clear_alert(void);
+
+/**
+ * @brief 警示层当前是否可见
  */
 
 bool lcd_is_alert_active(void);
 
+/*--------------------------------------------------------------------------
+ * 触摸与演示模式
+ *------------------------------------------------------------------------*/
+
 /**
- * @brief 获取当前界面视图类型
- * @return 视图类型
+ * @brief LVGL 的触摸输入设备是否创建成功
  */
 
-lcd_view_t lcd_get_view(void);
+bool lcd_touch_ready(void);
+
+/**
+ * @brief 演示模式：无触摸时自动轮播页面（也用于给评委演示）
+ */
+
+void lcd_set_demo_mode(bool on);
+bool lcd_get_demo_mode(void);
+
+/**
+ * @brief 当前毫秒计时（LVGL tick）
+ */
+
+uint32_t lcd_tick_ms(void);
 
 #endif /* __APP_SILVER_GUARDIAN_HUB_INCLUDE_LCD_H */
