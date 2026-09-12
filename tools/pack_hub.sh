@@ -106,8 +106,17 @@ echo "  $(stat -c %y "$BOARD_NSH" | cut -c1-19)  board/configs/nsh.fex"
 echo "  $(stat -c %y "$OUT_NSH"   | cut -c1-19)  image/nsh.fex  (已同步)"
 
 # 校验：新固件里带构建标记，旧的不带。没有标记说明同步没生效。
+# 注意 strings 偶尔会读到刚被覆盖前的旧内容（unionfs 视图延迟），
+# 所以先取一次，缺就等 2 秒重取，避免误报"同步没生效"吓自己一跳。
+strings "$OUT_NSH" > /tmp/nsh_strings.txt
+if ! grep -qF "SGHUB-BUILD" /tmp/nsh_strings.txt; then
+  echo "  (首次未命中，等 2 秒重取一次…)"
+  sleep 2
+  strings "$OUT_NSH" > /tmp/nsh_strings.txt
+fi
+
 for marker in "SGHUB-BUILD" "/dev/uorb/sensor_ambient_temp0"; do
-  if strings "$OUT_NSH" | grep -qF "$marker"; then
+  if grep -qF "$marker" /tmp/nsh_strings.txt; then
     echo "  [有] $marker"
   else
     echo "  [无] $marker  <- 同步可能没生效" >&2
