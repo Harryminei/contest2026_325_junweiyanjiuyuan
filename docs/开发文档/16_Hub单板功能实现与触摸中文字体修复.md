@@ -76,14 +76,30 @@ bash tools/sync_app.sh push
 # 2) 编译 + 自动校验 vela.bin 真的更新了
 bash tools/build_hub.sh
 
-# 3) 打包成可烧录镜像
-cd vendor/allwinnertech/lichee
-source envsetup.sh && lunch_nuttx r528s3-gemini-s1 && pack
-cd ~/contest2026_325_junweiyanjiuyuan
-cp vendor/allwinnertech/lichee/out/r528s3/gemini-s1_nand/image/*.img ./
+# 3) 打包成可烧录镜像（别直接跑 pack，见下面的坑）
+bash tools/pack_hub.sh
 
-# 4) Windows 侧用 PhoenixSuit 烧录（见文档 15）
+# 4) Windows 侧用 PhoenixSuit 烧录 C:\Users\Harryminei\flash_sg.img
 ```
+
+### ⚠️ 第 3 步为什么不能直接 `pack`
+
+**`pack` 会重新生成 `fes1.fex` / `boot0_nand.fex`，而 PhoenixSuit 只认出厂固件里那一份。
+用了编译生成的，烧录会卡在 0% 不动。** 实测差异：
+
+| 文件 | 出厂版（能烧） | `pack` 生成的（卡 0%） |
+|---|---|---|
+| `fes1.fex` | 21504 B `d63e3a84…` | 20640 B `a9c93f88…` |
+| `boot0_nand.fex` | 45056 B `13c5c05a…` | 45056 B `6a455123…` |
+
+`tools/pack_hub.sh` 把这套流程封好了：pack → 换回出厂 fes1/boot0 → **校验 md5** →
+用 dragon 重新打包（第二个参数 `sys_partition_for_dragon.fex` 不能省，否则产物只有 2MB）
+→ 拷到纯英文路径 `C:\Users\Harryminei\flash_sg.img`。
+
+出厂版 fes1/boot0 存在 `D:\Desktop\首届openvela比赛\tools\` 下，**不在 git 里**。
+丢了的话从出厂固件提取：`fes1.fex` @ `0xba400` 长 21504、`boot0_nand.fex` @ `0x12c00` 长 45056。
+
+**烧录时选英文路径的镜像** —— PhoenixSuit 读带中文的路径容易出问题。
 
 想先看看三份源码是否一致：
 
