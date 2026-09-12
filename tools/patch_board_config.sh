@@ -35,21 +35,18 @@ fi
 
 changed=0
 
-# ---------------------------------------------------------------- 逐项检查
-patch_one() {
-  local desc="$1" want="$2" pattern="$3"
-
-  if grep -qE "$pattern" "$DEFCONFIG"; then
-    echo "  [已是目标状态] $desc"
-  else
-    echo "  [需要修改]     $desc"
-    changed=1
-  fi
-}
-
 echo "检查 $DEFCONFIG"
-patch_one "关闭 LVGL 自带示例 CJK 字库(省 ~230KB, 应用自带字库)" \
-          "" '^# CONFIG_LV_FONT_SIMSUN_16_CJK is not set'
+
+# 注意：build.sh 每次编译后会跑 `make savedefconfig` 并把结果回写到这个文件。
+# savedefconfig 会省略"取默认值"的项，而 LV_FONT_SIMSUN_16_CJK 默认就是 n，
+# 所以回写之后那一行会**整行消失**——"行不存在"同样表示已关闭，不能算未打补丁。
+# 真正要避免的是它被打开成 =y。
+if grep -qE '^CONFIG_LV_FONT_SIMSUN_16_CJK=y' "$DEFCONFIG"; then
+  echo "  [需要修改]     关闭 LVGL 自带示例 CJK 字库(省 ~230KB, 应用自带字库)"
+  changed=1
+else
+  echo "  [已是目标状态] 关闭 LVGL 自带示例 CJK 字库(未启用即可，缺行=默认关闭)"
+fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
   [ "$changed" -eq 0 ] && echo "无需修改" || echo "有 $changed 项待修改（去掉 --check 执行）"
