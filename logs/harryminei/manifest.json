@@ -1,19 +1,69 @@
 {
   "schema_version": "1.0",
-  "team_id": "contest2026_000_openvela",
-  "github_login": "your-github-login",
-  "generator": "example",
+  "team_id": "contest2026_325_junweiyanjiuyuan",
+  "github_login": "Harryminei",
+  "generator": "claude-code",
   "sessions": [
     {
-      "session_id": "example-0000-0000-0000-000000000000",
+      "session_id": "sg-hub-20260824-001",
       "tool": "claude-code",
-      "started_at": "2026-01-01T08:00:00.000Z",
-      "last_event_at": "2026-01-01T08:00:10.000Z",
-      "event_count": 4,
-      "file_path": "logs/your-github-login/2026-01-01/claude-code__example.jsonl",
+      "started_at": "2026-08-24T09:30:00Z",
+      "last_event_at": "2026-08-24T12:10:00Z",
+      "event_count": 13,
+      "file_path": "logs/harryminei/2026-08-24/claude-code__hub-compile-flash.jsonl",
+      "collection_mode": "cli",
+      "health": "ok"
+    },
+    {
+      "session_id": "sg-hub-lcd-20260830-001",
+      "tool": "claude-code",
+      "started_at": "2026-08-30T02:00:00Z",
+      "last_event_at": "2026-08-30T02:50:00Z",
+      "event_count": 6,
+      "file_path": "logs/harryminei/2026-08-30/claude-code__sg-hub-lcd-20260830-001.jsonl",
+      "collection_mode": "cli",
+      "health": "ok"
+    },
+    {
+      "session_id": "sg-hub-lcd-20260906-001",
+      "tool": "claude-code",
+      "started_at": "2026-09-06T09:00:00Z",
+      "last_event_at": "2026-09-06T19:30:00Z",
+      "event_count": 8,
+      "file_path": "logs/harryminei/2026-09-06/claude-code__sg-hub-lcd-20260906-001.jsonl",
+      "collection_mode": "cli",
+      "health": "ok"
+    },
+    {
+      "session_id": "sg-hub-boardtest-20260912-002",
+      "tool": "claude-code",
+      "started_at": "2026-09-12T13:00:00Z",
+      "last_event_at": "2026-09-12T14:30:00Z",
+      "event_count": 16,
+      "file_path": "logs/harryminei/2026-09-12/claude-code__sg-hub-boardtest-20260912-002.jsonl",
+      "collection_mode": "cli",
+      "health": "ok"
+    },
+    {
+      "session_id": "sg-hub-standalone-20260912-001",
+      "tool": "claude-code",
+      "started_at": "2026-09-12T12:00:00Z",
+      "last_event_at": "2026-09-12T13:50:00Z",
+      "event_count": 13,
+      "file_path": "logs/harryminei/2026-09-12/claude-code__sg-hub-standalone-20260912-001.jsonl",
+      "collection_mode": "cli",
+      "health": "ok"
+    },
+    {
+      "session_id": "sg-hub-net-link-20260913-001",
+      "tool": "claude-code",
+      "started_at": "2026-09-13T01:30:00Z",
+      "last_event_at": "2026-09-13T08:35:00Z",
+      "event_count": 35,
+      "file_path": "logs/harryminei/2026-09-13/claude-code__sg-hub-net-link-20260913-001.jsonl",
       "collection_mode": "cli",
       "health": "ok"
     }
   ],
-  "updated_at": "2026-01-01T08:00:11.000000+00:00"
+  "updated_at": "2026-09-13T08:40:00Z"
 }
