@@ -90,6 +90,24 @@ else
   echo ""
 fi
 
+# ------------------------------------------------- 强制重编：绕开头文件依赖缺失
+#
+# 这个 app 没有 src/Make.dep，make 根本不跟踪 .h -> .c 的依赖。
+# 只改 .h 不改 .c 的话改动**永远进不了固件**：实测改了 include/diag.h，
+# diag.h 的 mtime 明明比 diag.c.o 新，make 依然不重编 diag.c，构建标记
+# 就一直停在旧值（和"vela.bin 不更新"是同一族坑）。
+#
+# push 用的是 rsync -a，mtime 原样带过来，所以只能在 push 之后显式 touch。
+# app 只有十来个 .c，全量重编十几秒，换"改哪都一定生效"。
+
+APP_B="${WORKSPACE}/contest2026_325_junweiyanjiuyuan/app/silver_guardian_hub"
+
+if [ -d "$APP_B" ]; then
+  find "$APP_B" -name '*.c' -exec touch {} +
+  echo "########## [2.5/5] 已 touch app 全部 .c（强制重编，绕开头文件依赖缺失） ##########"
+  echo ""
+fi
+
 # ------------------------------------------------------- 2. 记录编译前的基线
 BEFORE_MTIME="(不存在)"
 BEFORE_SIZE=0

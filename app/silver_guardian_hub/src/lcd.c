@@ -36,6 +36,7 @@
 #include "include/fonts.h"
 #include "include/touch.h"
 #include "include/ui.h"
+#include "include/led.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -90,8 +91,9 @@ static lcd_back_cb_t  g_back_cb;
 
 static char   g_title[32]  = "银发守护";
 static char   g_footer[64] = "守护中";
-static bool   g_net_connected = true;
-static int8_t g_net_signal    = -50;
+/* 默认"离线"：宁可开机先显示没网，也别像以前那样硬编码成已联网骗人 */
+
+static bool   g_net_connected;
 
 static bool     g_demo_mode;
 static uint32_t g_last_input_ms;
@@ -110,9 +112,12 @@ static void refresh_statusbar(void)
       return;
     }
 
+  /* 只显示真实状态，不再带那个编造的信号数字：
+   * 以前是 "已联网 50"（写死的 -50 + 100），看着专业其实是假的。 */
+
   if (g_net_connected)
     {
-      snprintf(buf, sizeof(buf), "已联网 %d", (int)g_net_signal + 100);
+      snprintf(buf, sizeof(buf), "已联网");
     }
   else
     {
@@ -139,6 +144,15 @@ static void alert_dismiss_cb(lv_event_t *e)
   (void)e;
 
   ui_notify_user_input();
+
+  /* 老人明确点了"知道了"，屏幕和指示灯一起收。
+   *
+   * 只在这条路径熄灯，不在 lcd_task 的超时自动收起里熄：
+   * 人不在跟前时屏幕超时收起了，灯必须继续闪 —— 那正是把人叫回来看
+   * 一眼的东西，也是这颗灯存在的全部意义。灯自己有保持时长兜底
+   * （提醒 30 秒 / SOS 5 分钟），不会无限闪下去。 */
+
+  sg_led_off();
   lcd_clear_alert();
 }
 
@@ -473,10 +487,14 @@ void lcd_set_back_callback(lcd_back_cb_t cb)
   g_back_cb = cb;
 }
 
-void lcd_set_network(bool connected, int8_t signal)
+void lcd_set_network(bool connected)
 {
+  if (g_net_connected == connected)
+    {
+      return;   /* 状态没变就不重画状态栏 */
+    }
+
   g_net_connected = connected;
-  g_net_signal    = signal;
   refresh_statusbar();
 }
 

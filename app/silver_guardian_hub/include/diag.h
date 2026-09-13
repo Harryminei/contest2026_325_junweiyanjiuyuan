@@ -31,8 +31,8 @@
  * （adb shell cat 出来直接能认，也不用担心 strings 认不出中文）。
  * 用途：确认板上跑的到底是哪一版 —— 烧错镜像这件事已经浪费过一轮排查。 */
 
-#define SG_HUB_VERSION    "1.3.0"
-#define SG_HUB_BUILD_TAG  "SGHUB-BUILD-20260912-1300"
+#define SG_HUB_VERSION    "1.9.0"
+#define SG_HUB_BUILD_TAG  "SGHUB-BUILD-20260913-LINK"
 
 /****************************************************************************
  * Public Function Prototypes

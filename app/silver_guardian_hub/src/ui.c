@@ -45,6 +45,10 @@
 #include "include/cloud.h"
 #include "include/storage.h"
 #include "include/touch.h"
+#include "include/net.h"
+#include "include/wifi.h"
+
+#include <pthread.h>
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -132,6 +136,9 @@ static lv_obj_t *g_event_list;
 
 static lv_obj_t *g_set_volume;
 static lv_obj_t *g_set_sit;
+static lv_obj_t *g_set_clock_y;
+static lv_obj_t *g_set_clock_mo;
+static lv_obj_t *g_set_clock_d;
 static lv_obj_t *g_set_clock_h;
 static lv_obj_t *g_set_clock_m;
 
@@ -151,8 +158,11 @@ static lv_obj_t *g_touch_area;
 
 /* 时间校准的临时值 */
 
-static int g_set_hour = -1;
+static int g_set_hour   = -1;
 static int g_set_minute = -1;
+static int g_set_year   = -1;
+static int g_set_month  = -1;
+static int g_set_day    = -1;
 
 /****************************************************************************
  * Private Functions
@@ -163,6 +173,11 @@ static void health_refresh(void);
 static void event_list_rebuild(void);
 static void edit_refresh(void);
 static void settings_refresh(void);
+static void timeset_refresh(void);
+static void wifi_refresh(void);
+static void wifi_pass_refresh(void);
+static void wifi_list_rebuild(void);
+static void wifi_status_refresh(void);
 
 /*--------------------------------------------------------------------------
  * 小工具
@@ -269,6 +284,9 @@ static const char *page_title(ui_page_t page)
       case UI_PAGE_HEALTH:     return "健康数据";
       case UI_PAGE_EVENTS:     return "事件记录";
       case UI_PAGE_SETTINGS:   return "设置";
+      case UI_PAGE_TIMESET:    return "日期时间校准";
+      case UI_PAGE_WIFI:       return "网络设置";
+      case UI_PAGE_WIFI_PASS:  return "输入密码";
       case UI_PAGE_ABOUT:      return "关于";
       case UI_PAGE_TOUCHTEST:  return "触摸自检";
       default:                 return "银发守护";
@@ -296,6 +314,9 @@ void ui_navigate(ui_page_t page)
       case UI_PAGE_HEALTH:     health_refresh();   break;
       case UI_PAGE_EVENTS:     event_list_rebuild(); break;
       case UI_PAGE_SETTINGS:   settings_refresh(); break;
+      case UI_PAGE_TIMESET:    timeset_refresh();  break;
+      case UI_PAGE_WIFI:       wifi_refresh();     break;
+      case UI_PAGE_WIFI_PASS:  wifi_pass_refresh(); break;
       default: break;
     }
 
@@ -319,6 +340,8 @@ void ui_back(void)
     {
       case UI_PAGE_MEDICATION: med_list_rebuild(); break;
       case UI_PAGE_SETTINGS:   settings_refresh(); break;
+      case UI_PAGE_TIMESET:    timeset_refresh();  break;
+      case UI_PAGE_WIFI:       wifi_refresh();     break;
       default: break;
     }
 
@@ -999,15 +1022,6 @@ static void settings_refresh(void)
 {
   char buf[32];
 
-  if (g_set_hour < 0)
-    {
-      time_t now = time(NULL);
-      struct tm *tm = localtime(&now);
-
-      g_set_hour   = tm->tm_hour;
-      g_set_minute = tm->tm_min;
-    }
-
   if (g_set_volume != NULL)
     {
       snprintf(buf, sizeof(buf), "%d", (int)g_settings.volume);
@@ -1019,16 +1033,189 @@ static void settings_refresh(void)
       snprintf(buf, sizeof(buf), "%d 分钟", (int)g_settings.sit_minutes);
       lv_label_set_text(g_set_sit, buf);
     }
+}
+
+/*--------------------------------------------------------------------------
+ * 日期时间校准
+ *
+ * 板子上没有 RTC 备份电池（原理图只有 VCC_RTC + 32.768K 晶振，没有纽扣电池），
+ * 一断电系统时钟就回到 1970。所以只能：
+ *   开机  —— 优先用上次校准值（存在 /data），没有就用固件构建日期兜底
+ *   使用中 —— 在设置里手拨到当前日期时间，拨完即写回系统并落盘
+ *
+ * 原来的实现只改「时/分」、固定保留年月日，等于日期永远停在 1970，
+ * 这也是这次要修的东西。
+ *------------------------------------------------------------------------*/
+
+#define TIMEBASE_KEY "timebase"
+
+static const char *const g_month_name[12] =
+{
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+};
+
+static int days_in_month(int year, int month)
+{
+  static const int d[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+  if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0))
+    {
+      return 29;
+    }
+
+  return (month >= 1 && month <= 12) ? d[month - 1] : 31;
+}
+
+/**
+ * @brief 把固件构建时刻当作兜底时间
+ *
+ * __DATE__ 形如 "Sep 13 2026"（个位日期用空格补齐），__TIME__ 形如 "10:41:23"。
+ * 固定宽度手解，不依赖 sscanf 的扫描集支持。
+ */
+
+static time_t build_epoch(void)
+{
+  const char *d = __DATE__;
+  const char *t = __TIME__;
+  struct tm tm;
+  int i;
+
+  memset(&tm, 0, sizeof(tm));
+
+  for (i = 0; i < 12; i++)
+    {
+      if (strncmp(d, g_month_name[i], 3) == 0)
+        {
+          tm.tm_mon = i;
+          break;
+        }
+    }
+
+  tm.tm_mday = atoi(d + 4);
+  tm.tm_year = atoi(d + 7) - 1900;
+
+  tm.tm_hour = atoi(t);
+  tm.tm_min  = atoi(t + 3);
+  tm.tm_sec  = atoi(t + 6);
+
+  return mktime(&tm);
+}
+
+/**
+ * @brief 开机恢复系统时钟（ui_init 里在建页面之前调一次）
+ */
+
+static void time_restore(void)
+{
+  struct timeval tv;
+  time_t base = 0;
+  int n;
+
+  n = storage_load(TIMEBASE_KEY, &base, sizeof(base));
+  if (n != (int)sizeof(base) || base <= 0)
+    {
+      base = build_epoch();
+      syslog(LOG_INFO, "[%s] 无历史校准值，用固件构建日期兜底\n", LOG_TAG);
+    }
+
+  if (base <= 0)
+    {
+      return;
+    }
+
+  tv.tv_sec  = base;
+  tv.tv_usec = 0;
+
+  if (settimeofday(&tv, NULL) == 0)
+    {
+      syslog(LOG_INFO, "[%s] 时钟已恢复\n", LOG_TAG);
+    }
+}
+
+/**
+ * @brief 把当前校准值写进系统时钟并落盘
+ */
+
+static void time_apply(void)
+{
+  struct timeval tv;
+  struct tm tm;
+  time_t when;
+
+  memset(&tm, 0, sizeof(tm));
+
+  tm.tm_year  = g_set_year - 1900;
+  tm.tm_mon   = g_set_month - 1;
+  tm.tm_mday  = g_set_day;
+  tm.tm_hour  = g_set_hour;
+  tm.tm_min   = g_set_minute;
+  tm.tm_sec   = 0;
+  tm.tm_isdst = -1;
+
+  when = mktime(&tm);
+
+  tv.tv_sec  = when;
+  tv.tv_usec = 0;
+
+  if (settimeofday(&tv, NULL) == 0)
+    {
+      /* 存下来，下次开机直接用它 —— 没 RTC 电池，这是唯一能跨重启的办法 */
+
+      storage_save(TIMEBASE_KEY, &when, sizeof(when));
+    }
+  else
+    {
+      syslog(LOG_ERR, "[%s] settimeofday 失败: %d\n", LOG_TAG, errno);
+    }
+}
+
+/**
+ * @brief 从系统时钟回填五行数值，并刷到标签上
+ *
+ * 每次进页面都从时钟重读：拨一下写一次时钟，两边本来就应该一致，
+ * 不存在需要保留的"未保存草稿"。
+ */
+
+static void timeset_refresh(void)
+{
+  char buf[32];
+  time_t now = time(NULL);
+  struct tm *tm = localtime(&now);
+
+  g_set_year   = tm->tm_year + 1900;
+  g_set_month  = tm->tm_mon + 1;
+  g_set_day    = tm->tm_mday;
+  g_set_hour   = tm->tm_hour;
+  g_set_minute = tm->tm_min;
+
+  if (g_set_clock_y != NULL)
+    {
+      snprintf(buf, sizeof(buf), "%d", g_set_year);
+      lv_label_set_text(g_set_clock_y, buf);
+    }
+
+  if (g_set_clock_mo != NULL)
+    {
+      snprintf(buf, sizeof(buf), "%d", g_set_month);
+      lv_label_set_text(g_set_clock_mo, buf);
+    }
+
+  if (g_set_clock_d != NULL)
+    {
+      snprintf(buf, sizeof(buf), "%d", g_set_day);
+      lv_label_set_text(g_set_clock_d, buf);
+    }
 
   if (g_set_clock_h != NULL)
     {
-      snprintf(buf, sizeof(buf), "%02d 时", g_set_hour);
+      snprintf(buf, sizeof(buf), "%02d", g_set_hour);
       lv_label_set_text(g_set_clock_h, buf);
     }
 
   if (g_set_clock_m != NULL)
     {
-      snprintf(buf, sizeof(buf), "%02d 分", g_set_minute);
+      snprintf(buf, sizeof(buf), "%02d", g_set_minute);
       lv_label_set_text(g_set_clock_m, buf);
     }
 }
@@ -1061,65 +1248,125 @@ static void set_sit_inc_cb(lv_event_t *e)
   if (g_settings.sit_minutes < 240) { g_settings.sit_minutes += 10; }
   settings_refresh();
 }
-static void set_hour_dec_cb(lv_event_t *e)
+/*--------------------------------------------------------------------------
+ * 日期时间校准页：五行 ±1 调节
+ *
+ * 拨一下就写一次时钟 + 落盘，所以这个页面**没有"保存"按钮** ——
+ * 少了这个按钮，也就没有"改完忘了保存、回头发现还是 1970"这回事。
+ * 五行 × 34 像素正好占满 176 高的内容区，本来也塞不下第六行。
+ *------------------------------------------------------------------------*/
+
+static void timeset_step(int field, int delta)
 {
-  (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
-  g_set_hour = (g_set_hour + 23) % 24;
-  settings_refresh();
+  switch (field)
+    {
+      case 0:   /* 年 */
+        g_set_year += delta;
+        if (g_set_year < 2000) { g_set_year = 2000; }
+        if (g_set_year > 2099) { g_set_year = 2099; }
+        break;
+
+      case 1:   /* 月 */
+        g_set_month += delta;
+        if (g_set_month < 1)  { g_set_month = 12; }
+        if (g_set_month > 12) { g_set_month = 1; }
+        break;
+
+      case 2:   /* 日 */
+        g_set_day += delta;
+        if (g_set_day < 1)
+          {
+            g_set_day = days_in_month(g_set_year, g_set_month);
+          }
+        break;
+
+      case 3:   /* 时 */
+        g_set_hour = (g_set_hour + delta + 24) % 24;
+        break;
+
+      default:  /* 分 */
+        g_set_minute = (g_set_minute + delta + 60) % 60;
+        break;
+    }
+
+  /* 换年月会把"日"顶出范围（1/31 -> 2/31），往前夹到当月最后一天 */
+
+  if (g_set_day > days_in_month(g_set_year, g_set_month))
+    {
+      g_set_day = days_in_month(g_set_year, g_set_month);
+    }
+
+  time_apply();
+  timeset_refresh();
 }
-static void set_hour_inc_cb(lv_event_t *e)
+
+static void on_year_dec(lv_event_t *e)
 {
   (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
-  g_set_hour = (g_set_hour + 1) % 24;
-  settings_refresh();
+  timeset_step(0, -1);
 }
-static void set_min_dec_cb(lv_event_t *e)
+
+static void on_year_inc(lv_event_t *e)
 {
   (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
-  g_set_minute = (g_set_minute + 55) % 60;
-  settings_refresh();
+  timeset_step(0, 1);
 }
-static void set_min_inc_cb(lv_event_t *e)
+
+static void on_month_dec(lv_event_t *e)
 {
   (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
-  g_set_minute = (g_set_minute + 5) % 60;
-  settings_refresh();
+  timeset_step(1, -1);
+}
+
+static void on_month_inc(lv_event_t *e)
+{
+  (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
+  timeset_step(1, 1);
+}
+
+static void on_day_dec(lv_event_t *e)
+{
+  (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
+  timeset_step(2, -1);
+}
+
+static void on_day_inc(lv_event_t *e)
+{
+  (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
+  timeset_step(2, 1);
+}
+
+static void on_hour_dec(lv_event_t *e)
+{
+  (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
+  timeset_step(3, -1);
+}
+
+static void on_hour_inc(lv_event_t *e)
+{
+  (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
+  timeset_step(3, 1);
+}
+
+static void on_min_dec(lv_event_t *e)
+{
+  (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
+  timeset_step(4, -1);
+}
+
+static void on_min_inc(lv_event_t *e)
+{
+  (void)e; ui_notify_user_input(); audio_play_tone(TONE_CLICK);
+  timeset_step(4, 1);
 }
 
 static void set_apply_cb(lv_event_t *e)
 {
-  struct timeval tv;
-  struct tm *tm;
-  time_t now;
-
   (void)e;
   ui_notify_user_input();
 
   settings_save();
-
-  /* 时间校准：保持年月日不变，只改时分 */
-
-  now = time(NULL);
-  tm  = localtime(&now);
-
-  tm->tm_hour = g_set_hour;
-  tm->tm_min  = g_set_minute;
-  tm->tm_sec  = 0;
-
-  tv.tv_sec  = mktime(tm);
-  tv.tv_usec = 0;
-
-  if (settimeofday(&tv, NULL) == 0)
-    {
-      audio_play_tone(TONE_STARTUP);
-      syslog(LOG_INFO, "[%s] 时间已校准为 %02d:%02d\n",
-             LOG_TAG, g_set_hour, g_set_minute);
-    }
-  else
-    {
-      audio_play_tone(TONE_ERROR);
-      syslog(LOG_ERR, "[%s] settimeofday 失败: %d\n", LOG_TAG, errno);
-    }
+  audio_play_tone(TONE_STARTUP);
 }
 
 /**
@@ -1150,12 +1397,32 @@ static void build_adjust_row(lv_obj_t *page, int y, const char *name,
   lv_obj_set_pos(b, 198, y);
 }
 
+static void build_timeset(lv_obj_t *page)
+{
+  /* 五行 × 34 = 170，正好占满 176 高的内容区。
+   * 没有"保存"按钮 —— 每拨一下即时生效并落盘，见 timeset_step()。 */
+
+  build_adjust_row(page, 0,   "年", &g_set_clock_y,
+                   on_year_dec, on_year_inc, 146);
+
+  build_adjust_row(page, 34,  "月", &g_set_clock_mo,
+                   on_month_dec, on_month_inc, 146);
+
+  build_adjust_row(page, 68,  "日", &g_set_clock_d,
+                   on_day_dec, on_day_inc, 146);
+
+  build_adjust_row(page, 102, "时", &g_set_clock_h,
+                   on_hour_dec, on_hour_inc, 146);
+
+  build_adjust_row(page, 136, "分", &g_set_clock_m,
+                   on_min_dec, on_min_inc, 146);
+}
+
 static void build_settings(lv_obj_t *page)
 {
   lv_obj_t *b;
 
-  /* 四行调节，每行高 34（按钮 44x32），内容区只有 176 高，
-   * 所以底部按钮放在 y=136 之后，正好占满不重叠。 */
+  /* 每行高 34（按钮 44x32），内容区只有 176 高 */
 
   build_adjust_row(page, 0,   "提示音量", &g_set_volume,
                    set_vol_dec_cb, set_vol_inc_cb, 146);
@@ -1163,14 +1430,339 @@ static void build_settings(lv_obj_t *page)
   build_adjust_row(page, 34,  "久坐阈值", &g_set_sit,
                    set_sit_dec_cb, set_sit_inc_cb, 146);
 
-  build_adjust_row(page, 68,  "时钟·时", &g_set_clock_h,
-                   set_hour_dec_cb, set_hour_inc_cb, 146);
+  /* 两个入口都挪到独立子页：年月日时分五行在这个高度里塞不下。
+   * 内容区只有 176 高，两行(68) + 三个按钮，按钮压到 34 高才装得下。 */
 
-  build_adjust_row(page, 102, "时钟·分", &g_set_clock_m,
-                   set_min_dec_cb, set_min_inc_cb, 146);
+  b = btn_make(page, "日期时间校准 >", 170, 34, COLOR_CARD, menu_entry_cb,
+               (void *)(intptr_t)UI_PAGE_TIMESET);
+  lv_obj_set_pos(b, 75, 70);
 
-  b = btn_make(page, "保存并应用", 170, 38, COLOR_ACCENT, set_apply_cb, NULL);
-  lv_obj_set_pos(b, 75, 136);
+  b = btn_make(page, "网络设置 >", 170, 34, COLOR_CARD, menu_entry_cb,
+               (void *)(intptr_t)UI_PAGE_WIFI);
+  lv_obj_set_pos(b, 75, 106);
+
+  b = btn_make(page, "保存并应用", 170, 34, COLOR_ACCENT, set_apply_cb, NULL);
+  lv_obj_set_pos(b, 75, 142);
+}
+
+/*--------------------------------------------------------------------------
+ * 网络设置
+ *
+ * 扫描和连接都要几秒（扫描实测 3~5 秒，连接还要等 DHCP），
+ * 直接放在按钮回调里会把 LVGL 主循环堵死、界面像卡住。
+ * 所以都丢到独立线程，主循环只轮询状态。
+ *------------------------------------------------------------------------*/
+
+#define WIFI_THREAD_STACK  16384
+
+static lv_obj_t *g_wifi_status;
+static lv_obj_t *g_wifi_list;
+static lv_obj_t *g_wifi_hint;
+
+static lv_obj_t *g_wifi_pass_ta;
+static lv_obj_t *g_wifi_pass_kb;
+
+static sg_wifi_ap_t     g_wifi_aps[SG_WIFI_MAX_APS];
+static volatile int     g_wifi_ap_count;
+static volatile int     g_wifi_busy;    /* 0 空闲, 1 扫描中, 2 连接中 */
+static int              g_wifi_busy_prev = -1;   /* 主循环用它做边沿检测 */
+static volatile int     g_wifi_result;  /* 连接结果，0 成功 */
+static char             g_wifi_sel_ssid[SG_WIFI_SSID_MAX];
+static uint32_t         g_wifi_sel_freq;
+
+static void *wifi_scan_thread(void *arg)
+{
+  int n;
+
+  (void)arg;
+
+  n = sg_wifi_scan(g_wifi_aps, SG_WIFI_MAX_APS);
+
+  g_wifi_ap_count = (n > 0) ? n : 0;
+  if (n < 0)
+    {
+      syslog(LOG_WARNING, "[%s] 扫描失败: %d\n", LOG_TAG, n);
+    }
+
+  g_wifi_busy = 0;
+  return NULL;
+}
+
+static void *wifi_connect_thread(void *arg)
+{
+  const char *psk = (const char *)arg;
+
+  g_wifi_result = sg_wifi_connect(g_wifi_sel_ssid, psk, g_wifi_sel_freq);
+  g_wifi_busy   = 0;
+  return NULL;
+}
+
+static void wifi_status_refresh(void)
+{
+  char buf[64];
+
+  if (g_wifi_status == NULL)
+    {
+      return;
+    }
+
+  if (g_wifi_busy == 1)
+    {
+      snprintf(buf, sizeof(buf), "正在扫描...");
+    }
+  else if (g_wifi_busy == 2)
+    {
+      snprintf(buf, sizeof(buf), "正在连接 %s ...", g_wifi_sel_ssid);
+    }
+  else if (sg_net_wifi_connected())
+    {
+      snprintf(buf, sizeof(buf), "已联网");
+    }
+  else
+    {
+      snprintf(buf, sizeof(buf), "离线");
+    }
+
+  lv_label_set_text(g_wifi_status, buf);
+}
+
+static void wifi_list_clear(void)
+{
+  if (g_wifi_list != NULL)
+    {
+      lv_obj_clean(g_wifi_list);
+    }
+}
+
+static void wifi_ap_cb(lv_event_t *e)
+{
+  int index = (int)(intptr_t)lv_event_get_user_data(e);
+
+  ui_notify_user_input();
+  audio_play_tone(TONE_CLICK);
+
+  if (index < 0 || index >= g_wifi_ap_count)
+    {
+      return;
+    }
+
+  /* 记下选中的 AP —— 频率要带着走，连接时得靠它钉信道 */
+
+  strncpy(g_wifi_sel_ssid, g_wifi_aps[index].ssid, SG_WIFI_SSID_MAX - 1);
+  g_wifi_sel_ssid[SG_WIFI_SSID_MAX - 1] = '\0';
+  g_wifi_sel_freq = g_wifi_aps[index].freq;
+
+  ui_navigate(UI_PAGE_WIFI_PASS);
+}
+
+static void wifi_list_rebuild(void)
+{
+  int i;
+
+  wifi_list_clear();
+
+  if (g_wifi_list == NULL)
+    {
+      return;
+    }
+
+  if (g_wifi_busy == 1)
+    {
+      label_make(g_wifi_list, "扫描中，请稍候...", SG_FONT_TEXT, COLOR_DIM,
+                 LV_ALIGN_TOP_LEFT, 4, 4);
+      return;
+    }
+
+  if (g_wifi_ap_count == 0)
+    {
+      label_make(g_wifi_list, "没有扫描到网络，点上面「扫描」试试",
+                 SG_FONT_TEXT, COLOR_DIM, LV_ALIGN_TOP_LEFT, 4, 4);
+      return;
+    }
+
+  for (i = 0; i < g_wifi_ap_count; i++)
+    {
+      char text[64];
+      lv_obj_t *b;
+
+      /* RSSI 直接标注 dBm：-60 就是 -60，不做没根据的"格数"换算 */
+
+      snprintf(text, sizeof(text), "%s   %d dBm",
+               g_wifi_aps[i].ssid, g_wifi_aps[i].rssi);
+
+      b = btn_make(g_wifi_list, text, 300, 34, COLOR_CARD, wifi_ap_cb,
+                   (void *)(intptr_t)i);
+      lv_obj_set_pos(b, 4, i * 38);
+    }
+}
+
+static void wifi_scan_cb(lv_event_t *e)
+{
+  pthread_t tid;
+
+  (void)e;
+  ui_notify_user_input();
+  audio_play_tone(TONE_CLICK);
+
+  if (g_wifi_busy != 0)
+    {
+      return;   /* 上一次还没完，别叠加 */
+    }
+
+  g_wifi_busy = 1;
+  wifi_status_refresh();
+  wifi_list_rebuild();
+
+  if (pthread_create(&tid, NULL, wifi_scan_thread, NULL) == 0)
+    {
+      pthread_detach(tid);
+    }
+  else
+    {
+      syslog(LOG_ERR, "[%s] 扫描线程起不来\n", LOG_TAG);
+      g_wifi_busy = 0;
+    }
+}
+
+static void build_wifi(lv_obj_t *page)
+{
+  lv_obj_t *b;
+
+  g_wifi_status = label_make(page, "离线", SG_FONT_TEXT, COLOR_TEXT,
+                             LV_ALIGN_TOP_LEFT, 6, 4);
+
+  b = btn_make(page, "扫描", 72, 32, COLOR_ACCENT, wifi_scan_cb, NULL);
+  lv_obj_set_pos(b, 240, 0);
+
+  /* AP 列表放在一个可滚动容器里，容器只有 136 高，多点网络靠滚动看 */
+
+  g_wifi_list = lv_obj_create(page);
+  lv_obj_remove_style_all(g_wifi_list);
+  lv_obj_set_size(g_wifi_list, 320, 136);
+  lv_obj_set_pos(g_wifi_list, 0, 38);
+  lv_obj_set_style_bg_opa(g_wifi_list, LV_OPA_TRANSP, 0);
+  lv_obj_add_flag(g_wifi_list, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+/*--------------------------------------------------------------------------
+ * WiFi 密码输入
+ *------------------------------------------------------------------------*/
+
+static void wifi_pass_ready_cb(lv_event_t *e)
+{
+  const char *txt;
+
+  (void)e;
+
+  if (g_wifi_pass_ta == NULL)
+    {
+      return;
+    }
+
+  txt = lv_textarea_get_text(g_wifi_pass_ta);
+
+  lv_obj_add_flag(g_wifi_pass_kb, LV_OBJ_FLAG_HIDDEN);
+
+  g_wifi_result = -1;
+  g_wifi_busy   = 2;
+  wifi_status_refresh();
+
+  /* psk 要活到线程跑完，拷一份静态缓冲里 —— textarea 的内容随时会变 */
+
+  {
+    static char psk[SG_WIFI_PSK_MAX];
+    pthread_t   tid;
+
+    strncpy(psk, txt ? txt : "", SG_WIFI_PSK_MAX - 1);
+    psk[SG_WIFI_PSK_MAX - 1] = '\0';
+
+    if (pthread_create(&tid, NULL, wifi_connect_thread, psk) == 0)
+      {
+        pthread_detach(tid);
+      }
+    else
+      {
+        g_wifi_busy = 0;
+      }
+  }
+}
+
+static void wifi_pass_cancel_cb(lv_event_t *e)
+{
+  (void)e;
+  ui_notify_user_input();
+  ui_back();
+}
+
+static void wifi_pass_kb_cb(lv_event_t *e)
+{
+  lv_event_code_t code = lv_event_get_code(e);
+
+  if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL)
+    {
+      lv_obj_add_flag(g_wifi_pass_kb, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void build_wifi_pass(lv_obj_t *page)
+{
+  lv_obj_t *b;
+
+  /* 不设页内标题：LCD 标题栏已经显示"输入密码"，这里每一像素都要留给键盘 */
+
+  g_wifi_pass_ta = lv_textarea_create(page);
+  lv_textarea_set_one_line(g_wifi_pass_ta, true);
+  lv_textarea_set_password_mode(g_wifi_pass_ta, false);  /* 老人要能看见自己输的 */
+  lv_textarea_set_max_length(g_wifi_pass_ta, SG_WIFI_PSK_MAX - 1);
+  lv_obj_set_size(g_wifi_pass_ta, 180, 26);
+  lv_obj_set_pos(g_wifi_pass_ta, 4, 0);
+  lv_obj_set_style_text_font(g_wifi_pass_ta, SG_FONT_TEXT, 0);
+
+  b = btn_make(page, "连接", 60, 26, COLOR_ACCENT, wifi_pass_ready_cb, NULL);
+  lv_obj_set_pos(b, 188, 0);
+
+  b = btn_make(page, "返回", 64, 26, COLOR_CARD_HI, wifi_pass_cancel_cb, NULL);
+  lv_obj_set_pos(b, 252, 0);
+
+  /* 键盘拿走顶部一行之外的全部高度。
+   *
+   * LVGL 的默认键位是 4 行（数字行 / qwerty / asdf / zxcv+空格行），
+   * 行高由控件高度除以行数算出。给 118 高时每行只有 29px，低于按钮矩阵
+   * 的最小行高，**下面两行会被直接裁掉** —— 实测就是"只剩两行字母"。
+   * 148 / 4 = 37px，四行都能出来。 */
+
+  g_wifi_pass_kb = lv_keyboard_create(page);
+  lv_obj_set_size(g_wifi_pass_kb, 320, 148);
+  lv_obj_set_pos(g_wifi_pass_kb, 0, 28);
+  lv_keyboard_set_textarea(g_wifi_pass_kb, g_wifi_pass_ta);
+  lv_obj_add_event_cb(g_wifi_pass_kb, wifi_pass_kb_cb, LV_EVENT_ALL, NULL);
+}
+
+static void wifi_pass_refresh(void)
+{
+  char buf[80];
+
+  if (g_wifi_pass_ta == NULL)
+    {
+      return;
+    }
+
+  /* SSID 和错误提示都走占位符 —— 屏幕上没有多余的横向空间放标签 */
+
+  snprintf(buf, sizeof(buf), "密码: %s", g_wifi_sel_ssid);
+  lv_textarea_set_placeholder_text(g_wifi_pass_ta, buf);
+  lv_textarea_set_text(g_wifi_pass_ta, "");
+
+  if (g_wifi_pass_kb != NULL)
+    {
+      lv_obj_clear_flag(g_wifi_pass_kb, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void wifi_refresh(void)
+{
+  wifi_status_refresh();
+  wifi_list_rebuild();
 }
 
 /*--------------------------------------------------------------------------
@@ -1400,6 +1992,38 @@ void ui_tick(uint32_t ticks)
 
   last_sec = ticks;
 
+  /* WiFi 的扫描/连接跑在后台线程里。这里只做状态边沿检测：
+   * 界面上不主动轮询结果，线程跑完把 g_wifi_busy 清零，下一拍就能看到。
+   * 1Hz 的粒度对 3~5 秒的扫描来说够用。 */
+
+  if (g_wifi_busy != g_wifi_busy_prev)
+    {
+      g_wifi_busy_prev = g_wifi_busy;
+
+      if (g_current == UI_PAGE_WIFI)
+        {
+          wifi_status_refresh();
+          wifi_list_rebuild();
+        }
+      else if (g_current == UI_PAGE_WIFI_PASS && g_wifi_busy == 0)
+        {
+          if (g_wifi_result == OK)
+            {
+              audio_play_tone(TONE_STARTUP);
+              ui_back();       /* 连上了退回网络页，能直接看到"已联网" */
+            }
+          else
+            {
+              /* 失败留在原页并把键盘放回来，省得老人重新进一遍 */
+
+              audio_play_tone(TONE_ERROR);
+              lv_textarea_set_placeholder_text(g_wifi_pass_ta,
+                                               "连接失败，请重试");
+              lv_obj_clear_flag(g_wifi_pass_kb, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
+
   /* 每秒刷新的内容 */
 
   if (g_current == UI_PAGE_HOME)
@@ -1446,6 +2070,9 @@ int ui_init(lv_obj_t *content_parent)
     { UI_PAGE_HEALTH,     build_health     },
     { UI_PAGE_EVENTS,     build_events     },
     { UI_PAGE_SETTINGS,   build_settings   },
+    { UI_PAGE_TIMESET,    build_timeset    },
+    { UI_PAGE_WIFI,       build_wifi       },
+    { UI_PAGE_WIFI_PASS,  build_wifi_pass  },
     { UI_PAGE_ABOUT,      build_about      },
     { UI_PAGE_TOUCHTEST,  build_touchtest  },
   };
@@ -1456,6 +2083,11 @@ int ui_init(lv_obj_t *content_parent)
     {
       return -EINVAL;
     }
+
+  /* 先把系统时钟拨到合理值，再建页面 —— 否则主页第一帧就是 1970。
+   * 没有 RTC 备份电池，这一步每次开机都得做。 */
+
+  time_restore();
 
   /* 页面容器：铺满内容区，黑色背景 */
 

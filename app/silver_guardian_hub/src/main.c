@@ -24,18 +24,24 @@
 #include "include/sensors.h"
 #include "include/audio.h"
 #include "include/event.h"
+#include "include/led.h"
 #include "include/medication.h"
 #include "include/cloud.h"
+#include "include/net.h"
+#include "include/sntp.h"
+#include "include/link.h"
 #include "include/lcd.h"
 #include "include/ui.h"
 #include "include/diag.h"
+
+#include <pthread.h>
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
 #define LOG_TAG  "silver_hub"
-#define APP_VER  "1.3.0"
+#define APP_VER  "1.9.0"
 
 /* 主循环 10ms：原来 20ms 时 LVGL 每轮最多晚 20ms 才处理触摸，
  * 叠加 indev 自身的采样周期，手感偏"迟钝"，用户反馈过触摸不灵敏。 */
@@ -46,15 +52,47 @@
 
 #define DIAG_INTERVAL_MS (30 * 1000)
 
+/* 校时失败后每隔多久再试（联网了但服务器没回应的情况） */
+
+#define TIME_SYNC_RETRY_MS (60 * 1000)
+
+/* SNTP 线程栈。这个线程只是收发一个 UDP 包，8KB 绰绰有余。 */
+
+#define TIME_SYNC_STACK 8192
+
 /****************************************************************************
  * Private Data
  ****************************************************************************/
 
 static volatile bool g_running = true;
 
+/* 校时状态：成功后不再重试（本次开机内） */
+
+static volatile bool g_time_synced;
+static volatile bool g_time_syncing;
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/**
+ * @brief 后台校时线程
+ *
+ * sg_sntp_sync() 会阻塞（最坏 = 服务器数 × 3 秒），所以不能在主循环里调。
+ */
+
+static void *time_sync_thread(void *arg)
+{
+  (void)arg;
+
+  if (sg_sntp_sync() == OK)
+    {
+      g_time_synced = true;
+    }
+
+  g_time_syncing = false;
+  return NULL;
+}
 
 /**
  * @brief 依次初始化各模块
@@ -99,6 +137,16 @@ static int system_init(void)
              LOG_TAG, ret);
     }
 
+  /* 指示灯（板载 WS2812 RGB）：和音频一样是"提醒通道"，失败只意味着少一路提示。
+   * 目前外接喇叭还没到位，指示灯是唯一能落到实处的告警反馈。 */
+
+  ret = sg_led_init();
+  if (ret < 0)
+    {
+      syslog(LOG_WARNING, "[%s] 指示灯不可用(%d)，告警只剩屏幕\n",
+             LOG_TAG, ret);
+    }
+
   /* 板上传感器 */
 
   opened = sensors_init();
@@ -122,6 +170,15 @@ static int system_init(void)
       syslog(LOG_WARNING, "[%s] 云端模块初始化失败: %d\n", LOG_TAG, ret);
     }
 
+  /* 板间联动：收手环端发来的报文。失败不致命，单板照样能用。 */
+
+  ret = sg_link_init();
+  if (ret < 0)
+    {
+      syslog(LOG_WARNING, "[%s] 板间联动不可用(%d)，只做单板运行\n",
+             LOG_TAG, ret);
+    }
+
   /* 显示与触摸（内部会建好所有页面） */
 
   ret = silver_lcd_init();
@@ -143,6 +200,7 @@ static int system_init(void)
 static void system_run(void)
 {
   uint32_t last_diag_ms;
+  uint32_t last_sync_ms = 0;
 
   syslog(LOG_INFO, "[%s] 进入主循环\n", LOG_TAG);
 
@@ -152,8 +210,12 @@ static void system_run(void)
 
   while (g_running)
     {
-      const cloud_status_t *cloud;
       uint32_t now;
+
+      /* 板间联动：把收到的报文翻译成事件塞进队列。
+       * 必须在 event_process() 之前 —— 同一轮就能分发出去，不用等下一轮。 */
+
+      sg_link_poll();
 
       /* 事件分发（SOS / 久坐 / 用药 -> 提示音 + 警示层） */
 
@@ -180,10 +242,46 @@ static void system_run(void)
 
       ui_tick(lcd_tick_ms());
 
-      /* 同步网络状态到状态栏 */
+      /* 指示灯闪烁（内部自己取时钟，10ms 一轮足够 125ms 半周期） */
 
-      cloud = cloud_get_status();
-      lcd_set_network(cloud->wifi_connected, cloud->wifi_signal);
+      sg_led_tick();
+
+      /* 同步网络状态到状态栏。注意读的是真实网络栈（net.c），
+       * 不是 cloud 模块 —— 那个是本地桩，wifi_connected 恒为 true。 */
+
+      {
+        bool online = sg_net_wifi_connected();
+
+        lcd_set_network(online);
+
+        /* 联网了就校一次时（板子没有 RTC 电池，开机时间只是固件构建日期兜底）。
+         * 失败每分钟重试，成功了本次开机就不再试。 */
+
+        if (online && !g_time_synced && !g_time_syncing &&
+            (uint32_t)(now - last_sync_ms) >= TIME_SYNC_RETRY_MS)
+          {
+            pthread_attr_t attr;
+            pthread_t      tid;
+
+            last_sync_ms  = now;
+            g_time_syncing = true;
+
+            pthread_attr_init(&attr);
+            pthread_attr_setstacksize(&attr, TIME_SYNC_STACK);
+
+            if (pthread_create(&tid, &attr, time_sync_thread, NULL) == 0)
+              {
+                pthread_detach(tid);
+              }
+            else
+              {
+                syslog(LOG_WARNING, "[%s] 校时线程起不来\n", LOG_TAG);
+                g_time_syncing = false;
+              }
+
+            pthread_attr_destroy(&attr);
+          }
+      }
 
       /* 定时刷新自检报告 */
 
@@ -202,10 +300,12 @@ static void system_cleanup(void)
   syslog(LOG_INFO, "[%s] 正在退出...\n", LOG_TAG);
 
   lcd_deinit();
+  sg_link_deinit();
   cloud_deinit();
   medication_deinit();   /* 内部会保存用药计划 */
   sensors_deinit();
   audio_deinit();
+  sg_led_deinit();
   event_deinit();
 
   syslog(LOG_INFO, "[%s] 已退出\n", LOG_TAG);

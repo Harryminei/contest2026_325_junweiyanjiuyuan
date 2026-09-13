@@ -24,6 +24,11 @@ CSRCS += src/ui.c
 CSRCS += src/touch.c
 CSRCS += src/sensors.c
 CSRCS += src/storage.c
+CSRCS += src/led.c
+CSRCS += src/net.c
+CSRCS += src/wifi.c
+CSRCS += src/sntp.c
+CSRCS += src/link.c
 CSRCS += src/diag.c
 
 # 中文字库（由 tools/gen_lvgl_fonts.sh 生成，Noto Sans SC / SIL OFL 1.1）

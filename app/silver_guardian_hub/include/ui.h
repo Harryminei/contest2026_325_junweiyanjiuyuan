@@ -31,6 +31,9 @@ typedef enum
   UI_PAGE_HEALTH,         /* 健康数据（板上传感器） */
   UI_PAGE_EVENTS,         /* 事件记录 */
   UI_PAGE_SETTINGS,       /* 设置 */
+  UI_PAGE_TIMESET,        /* 日期时间校准 */
+  UI_PAGE_WIFI,           /* 网络设置 */
+  UI_PAGE_WIFI_PASS,      /* WiFi 密码输入 */
   UI_PAGE_ABOUT,          /* 关于 / 自检 */
   UI_PAGE_TOUCHTEST,      /* 触摸自检 */
   UI_PAGE_COUNT

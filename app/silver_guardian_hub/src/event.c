@@ -22,6 +22,7 @@
 #include "include/audio.h"
 #include "include/cloud.h"
 #include "include/lcd.h"
+#include "include/led.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -113,6 +114,7 @@ static void handle_sos_event(const event_t *event)
   syslog(LOG_INFO, "[%s] 处理 SOS 事件\n", LOG_TAG);
 
   audio_play_tone(TONE_SOS);
+  sg_led_alert(SG_LED_COLOR_RED, SG_LED_BLINK_FAST, SG_LED_SOS_HOLD_MS);
   cloud_report_alert("sos", "老人触发SOS紧急呼救");
 
   lcd_show_alert(LCD_ALERT_SOS, "紧急求助！",
@@ -126,6 +128,7 @@ static void handle_sos_cancel_event(const event_t *event)
   syslog(LOG_INFO, "[%s] 处理 SOS 取消\n", LOG_TAG);
 
   audio_play_tone(TONE_CLICK);
+  sg_led_off();
   lcd_clear_alert();
 }
 
@@ -141,6 +144,7 @@ static void handle_sitting_event(const event_t *event)
            (unsigned long)minutes);
 
   audio_play_tone(TONE_SITTING);
+  sg_led_alert(SG_LED_COLOR_YELLOW, SG_LED_BLINK_SLOW, SG_LED_NOTIFY_HOLD_MS);
   lcd_show_alert(LCD_ALERT_SITTING, "久坐提醒", body);
 
   cloud_report_alert("sitting_reminder", body);
@@ -151,6 +155,10 @@ static void handle_activity_resumed(const event_t *event)
   (void)event;
 
   syslog(LOG_INFO, "[%s] 恢复活动\n", LOG_TAG);
+
+  /* 人回来了，告警灯没有继续闪的理由 */
+
+  sg_led_off();
 }
 
 static void handle_medication_event(const event_t *event)
@@ -162,6 +170,7 @@ static void handle_medication_event(const event_t *event)
   snprintf(body, sizeof(body), "该吃药了\n\n请服用 %s", event->message);
 
   audio_play_tone(TONE_MEDICATION);
+  sg_led_alert(SG_LED_COLOR_GREEN, SG_LED_BLINK_SLOW, SG_LED_NOTIFY_HOLD_MS);
   lcd_show_alert(LCD_ALERT_MEDICATION, "用药提醒", body);
 }
 

@@ -86,7 +86,7 @@ void lcd_set_back_callback(lcd_back_cb_t cb);
  * @brief 设置网络状态显示
  */
 
-void lcd_set_network(bool connected, int8_t signal);
+void lcd_set_network(bool connected);
 
 /**
  * @brief 设置底部守护状态文字

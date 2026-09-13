@@ -21,6 +21,8 @@
 #include "include/storage.h"
 #include "include/sensors.h"
 #include "include/audio.h"
+#include "include/led.h"
+#include "include/link.h"
 #include "include/touch.h"
 #include "include/event.h"
 #include "include/medication.h"
@@ -128,6 +130,8 @@ int diag_dump(const char *reason)
   const sensors_state_t *st = sensors_get();
   const audio_status_t  *as = audio_get_status();
   const touch_diag_t    *td = touch_probe_get();
+  const sg_led_diag_t      *ld = sg_led_get_diag();
+  const sg_link_diag_t     *lk = sg_link_get_diag();
   FILE *fp;
   char   buf[512];
   char   ts[32];
@@ -207,6 +211,32 @@ int diag_dump(const char *reason)
 
   list_dir("/dev/audio", buf, sizeof(buf));
   fprintf(fp, "  /dev/audio 下: %s\n", buf);
+
+  /*----------------------------------------------------------- 指示灯 */
+
+  fprintf(fp, "\n[指示灯] 状态: %s\n", ld->opened ? "就绪" : "不可用");
+  fprintf(fp, "  设备节点    : %s\n", ld->devpath ? ld->devpath : "(未打开)");
+  if (!ld->opened)
+    {
+      fprintf(fp, "  打开失败 errno: %d\n", ld->err);
+    }
+  fprintf(fp, "  当前颜色    : #%06lX %s\n", (unsigned long)ld->color,
+          sg_led_blink_name(ld->blink));
+  fprintf(fp, "  累计写设备  : %lu 次\n", (unsigned long)ld->writes);
+
+  /*--------------------------------------------------------- 板间联动 */
+
+  fprintf(fp, "\n[联动] 监听: %s (UDP %d)\n",
+          lk->opened ? "就绪" : "不可用", SG_LINK_PORT);
+  if (!lk->opened)
+    {
+      fprintf(fp, "  建立失败 errno: %d\n", lk->err);
+    }
+  fprintf(fp, "  手环在线    : %s\n", lk->peer_online ? "是" : "否");
+  fprintf(fp, "  累计收报文  : %lu 条, 丢弃 %lu 条\n",
+          (unsigned long)lk->rx_lines, (unsigned long)lk->rx_dropped);
+  fprintf(fp, "  最近收到    : %s\n",
+          (lk->last_rx_ms != 0) ? "有" : "还没有过");
 
   /*------------------------------------------------------------- 传感器 */
 
